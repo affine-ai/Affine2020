@@ -1,5 +1,4 @@
-from Affine.Vision.classification.src.darknet53 import *
-from train_utils import parse_args
+from Affine.Common.utils.src.train_utils import parse_args
 
 import time
 import os
