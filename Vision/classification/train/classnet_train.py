@@ -26,22 +26,6 @@ def main_worker( gpu, args, config ):
                                  world_size=args.world_size, rank=gpu )
         print( "Process: {}, rank: {}, world_size: {}".format( gpu, dist.get_rank(), dist.get_world_size() ) )
 
-    model = torchvision.models.resnet101( pretrained=args.pretrained )
-    criterion = nn.CrossEntropyLoss().cuda( gpu )
-    optimizer = optim.Adam( model.parameters(), lr=args.learning_rate )
-
-    torch.cuda.set_device( gpu )
-    model.cuda( gpu )
-    if args.gpu is None:
-        model = torch.nn.parallel.DistributedDataParallel( model, device_ids=[ gpu ], output_device=gpu )
-
-    if args.resume:
-        print( "Loading checkpoint {}".format( config.checkpoint_file ) )
-        checkpoint = torch.load( config.checkpoint_file, map_location='cpu' )
-        best_acc1 = checkpoint[ 'best_acc1' ]
-        model.load_state_dict( checkpoint[ "model_state_dict" ] )
-        optimizer.load_state_dict( checkpoint[ "optimizer_state_dict" ] )
-
     # Training set preprocessing and loader
     normalize = transforms.Normalize( [ 0.485, 0.456, 0.406 ],
                                       [ 0.229, 0.224, 0.225 ] )
@@ -78,6 +62,23 @@ def main_worker( gpu, args, config ):
                                               shuffle=False, 
                                               num_workers=args.workers, 
                                               pin_memory=True )
+
+
+    model = torchvision.models.resnet101( pretrained=args.pretrained )
+    criterion = nn.CrossEntropyLoss().cuda( gpu )
+    optimizer = optim.Adam( model.parameters(), lr=args.learning_rate )
+
+    torch.cuda.set_device( gpu )
+    model.cuda( gpu )
+    if args.gpu is None:
+        model = torch.nn.parallel.DistributedDataParallel( model, device_ids=[ gpu ], output_device=gpu )
+
+    if args.resume:
+        print( "Loading checkpoint {}".format( config.checkpoint_file ) )
+        checkpoint = torch.load( config.checkpoint_file, map_location='cpu' )
+        best_acc1 = checkpoint[ 'best_acc1' ]
+        model.load_state_dict( checkpoint[ "model_state_dict" ] )
+        optimizer.load_state_dict( checkpoint[ "optimizer_state_dict" ] )
 
     if args.evaluate:
         validate( val_loader, model, criterion, gpu, args )
