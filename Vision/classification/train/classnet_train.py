@@ -1,4 +1,4 @@
-from Affine.Common.utils.src.train_utils import parse_args
+from Affine.Common.utils.src.train_utils import parse_args, AverageMeter, ProgressMeter, Config, setup_and_launch
 
 import time
 import os
@@ -16,44 +16,9 @@ from torchvision import transforms, datasets
 from torch.utils.tensorboard import SummaryWriter
 
 
-TRAIN_PATH = "~/Downloads/ImageNet/train"
-VAL_PATH = "~/Downloads/ImageNet/val"
-CHECKPOINT_PATH="checkpoint"
-
-checkpoint_file = os.path.join( CHECKPOINT_PATH, "checkpoint.pth.tar" )
-
-def main():
-    global checkpoint_file
-    args = parse_args()
-
-    gpus_per_node = torch.cuda.device_count()
-    print( "{} GPUs found.".format( gpus_per_node ) )
-
-    torch.manual_seed( 42 )
-
-    if args.resume_from:
-        args.resume = True
-        checkpoint_file = os.path.join( CHECKPOINT_PATH, args.resume_from )
-    if not os.path.isfile( checkpoint_file ):
-        print( "No checkpoint file found: {}".format( checkpoint_file ) )
-        exit()
-
-    if args.gpu is not None:
-        args.world_size = 1
-        warnings.warn( "You have chosen to train on a specific GPU")
-        setup_worker( args.gpu, 1, args )
-    else:
-        args.world_size = args.nnodes * gpus_per_node
-        args.batch_size = int( args.batch_size / args.world_size )
-        args.workers = int( ( args.workers + gpus_per_node - 1 ) / gpus_per_node )
-        mp.spawn( setup_worker, nprocs=gpus_per_node, args=( gpus_per_node, args ) )
-
-    print( "All Done.")
-
-def setup_worker( gpu, gpus_per_node, args ):
+def main_worker( gpu, args, config ):
     best_acc1 = 0
     print( "GPU: {}, Process: {}, rank: {}, world_size: {}".format( gpu, gpu, gpu, args.world_size ) )
-
     args.writer = SummaryWriter( filename_suffix="{}".format( gpu ) )
 
     if args.gpu is None:
@@ -71,8 +36,8 @@ def setup_worker( gpu, gpus_per_node, args ):
         model = torch.nn.parallel.DistributedDataParallel( model, device_ids=[ gpu ], output_device=gpu )
 
     if args.resume:
-        print( "Loading checkpoint {}".format( checkpoint_file ) )
-        checkpoint = torch.load( checkpoint_file, map_location='cpu' )
+        print( "Loading checkpoint {}".format( config.checkpoint_file ) )
+        checkpoint = torch.load( config.checkpoint_file, map_location='cpu' )
         best_acc1 = checkpoint[ 'best_acc1' ]
         model.load_state_dict( checkpoint[ "model_state_dict" ] )
         optimizer.load_state_dict( checkpoint[ "optimizer_state_dict" ] )
@@ -83,11 +48,10 @@ def setup_worker( gpu, gpus_per_node, args ):
     
     transform = transforms.Compose( [ transforms.RandomResizedCrop( 224 ), \
                                       transforms.RandomHorizontalFlip(), \
-                                      transforms.RandomRotation( 360 ),\
                                       transforms.ToTensor(),
                                       normalize ] )
 
-    dataset = datasets.ImageFolder( TRAIN_PATH, transform=transform )
+    dataset = datasets.ImageFolder( config.train_path, transform=transform )
 
     if args.gpu is None:
         train_sampler = torch.utils.data.distributed.DistributedSampler( dataset, 
@@ -108,7 +72,7 @@ def setup_worker( gpu, gpus_per_node, args ):
                                           transforms.ToTensor(),
                                           normalize ] )
     
-    valset = datasets.ImageFolder( VAL_PATH, transform=val_transform )
+    valset = datasets.ImageFolder( config.val_path, transform=val_transform )
     val_loader = torch.utils.data.DataLoader( valset, 
                                               batch_size=args.batch_size, 
                                               shuffle=False, 
@@ -133,14 +97,14 @@ def setup_worker( gpu, gpus_per_node, args ):
         is_best = acc1 > best_acc1
         best_acc1 = max( acc1, best_acc1 )
 
-        if args.gpu or ( gpu % gpus_per_node == 0 ):
+        if args.gpu or ( gpu % args.world_size == 0 ):
             print( "Saving checkpoint")
             save_checkpoint( {
                 "epoch": epoch + 1,
                 "model_state_dict": model.state_dict(),
                 "best_acc1": best_acc1,
                 "optimizer_state_dict": optimizer.state_dict(),
-            }, is_best )
+            }, is_best, filename=config.checkpoint_write )
 
         time0 = time.time()
     
@@ -228,41 +192,14 @@ def adjust_learning_rate( optimizer, epoch, args ):
     for param_group in optimizer.param_groups:
         param_group[ 'lr' ] = lr
 
-def save_checkpoint( state, is_best=True, filename=checkpoint_file ):
+def save_checkpoint( state, is_best=True, filename=None ):
     torch.save( state, filename )
 
-class AverageMeter( object ):
-    def __init__( self, name, fmt=":f" ):
-        self.name = name
-        self.fmt = fmt
-        
-        self.val = 0
-        self.avg = 0.0
-        self.sum = 0.0
-        self.count = 0
-
-    def update( self, val, n=1 ):
-        self.val = val
-        self.sum += val * n
-        self.count += n
-        self.avg = self.sum / self.count
-
-    def __str__( self ):
-        fmt_str = "{name} {val" + self.fmt + "} ({avg" + self.fmt + "})"
-        return fmt_str.format( **self.__dict__ )
-
-class ProgressMeter( object ):
-    def __init__( self, num_batches, meters, prefix='' ):
-        self.meters = meters
-        self.prefix = prefix
-        num_digits = len( str( num_batches // 1 ) )
-        fmt = "{:" + str( num_digits ) + "d}"
-        self.batch_fmtstr = "[" + fmt + "/" + fmt.format( num_batches ) + "]"
-
-    def display( self, batch ):
-        entries = [ self.prefix + self.batch_fmtstr.format( batch ) ]
-        entries += [ str( meter ) for meter in self.meters ]
-        print( "\t".join( entries ) )
 
 if __name__ == "__main__":
-    main()
+    config = Config()
+    config.train_path = "~/Datasets/ImageNet/train"
+    config.val_path = "~/Datasets/ImageNet/val"
+    config.checkpoint_path = "checkpoint"
+    config.checkpoint_name = "checkpoint.pth.tar"
+    setup_and_launch( worker_fn=main_worker, config=config )
