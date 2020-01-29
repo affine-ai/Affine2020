@@ -87,7 +87,7 @@ def setup_and_launch( worker_fn=None, config=None ):
     else:
         config.checkpoint_file = os.path.join( config.checkpoint_path, config.checkpoint_name ) 
     
-    if not os.path.isfile( config.checkpoint_file ):
+    if args.resume and not os.path.isfile( config.checkpoint_file ):
         print( "No checkpoint file found: {}".format( config.checkpoint_file ) )
         exit()
 

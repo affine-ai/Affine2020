@@ -38,8 +38,7 @@ def main_worker( gpu, args, config ):
     dataset = datasets.ImageFolder( config.train_path, transform=transform )
 
     if args.gpu is None:
-        train_sampler = torch.utils.data.distributed.DistributedSampler( dataset, 
-                                                                         rank=gpu )
+        train_sampler = torch.utils.data.distributed.DistributedSampler( dataset, rank=gpu )
     else:
         train_sampler = None
 
