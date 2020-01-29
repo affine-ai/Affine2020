@@ -18,13 +18,13 @@ from torch.utils.tensorboard import SummaryWriter
 
 def main_worker( gpu, args, config ):
     best_acc1 = 0
-    print( "GPU: {}, Process: {}, rank: {}, world_size: {}".format( gpu, gpu, gpu, args.world_size ) )
     args.writer = SummaryWriter( filename_suffix="{}".format( gpu ) )
 
     if args.gpu is None:
         dist.init_process_group( backend=args.dist_backend, 
                                  init_method="tcp://10.0.1.164:12345", 
                                  world_size=args.world_size, rank=gpu )
+        print( "Process: {}, rank: {}, world_size: {}".format( gpu, dist.get_rank(), dist.get_world_size() ) )
 
     model = torchvision.models.resnet101( pretrained=args.pretrained )
     criterion = nn.CrossEntropyLoss().cuda( gpu )
