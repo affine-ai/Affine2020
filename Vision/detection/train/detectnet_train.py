@@ -29,7 +29,7 @@ def main_worker( gpu, args, config ):
 
     # Training set preprocessing and loader    
     transform = transforms.Compose( [ transforms.ToTensor() ] )
-    ann_file = os.path.join( config.annotations_path, config.annotations_file )
+    ann_file = os.path.join( config.ann_path, config.ann_file )
     dataset = datasets.CocoDetection( config.train_path, annFile=ann_file, transform=transform )
 
     if args.gpu is None:
@@ -192,8 +192,8 @@ if __name__ == "__main__":
     config = Config()
     config.train_path = "/home/vipul/Datasets/COCO2017/train"
     config.val_path = "/home/vipul/Datasets/COCO2017/val"
-    config.annotations_path = "/home/vipul/Datasets/COCO2017/annotations"
-    config.annotations_file = "instances_train2017.json"
+    config.ann_path = "/home/vipul/Datasets/COCO2017/annotations"
+    config.ann_file = "instances_train2017.json"
     config.checkpoint_path = "checkpoint"
     config.checkpoint_name = "checkpoint.pth.tar"
     setup_and_launch( worker_fn=main_worker, config=config )

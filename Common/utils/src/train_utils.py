@@ -87,9 +87,12 @@ def setup_and_launch( worker_fn=None, config=None ):
     else:
         config.checkpoint_file = os.path.join( config.checkpoint_path, config.checkpoint_name ) 
     
-    if args.resume and not os.path.isfile( config.checkpoint_file ):
-        print( "No checkpoint file found: {}".format( config.checkpoint_file ) )
-        exit()
+    if args.resume:
+        if not os.path.isfile( config.checkpoint_file ):
+            print( "No checkpoint file found: {}".format( config.checkpoint_file ) )
+            exit()
+        else:
+            print( "\n***You have chosen to resume from a checkpoint\n***\n" )
 
     # print the provided config
     print( "Config provided:\n================" )
@@ -103,7 +106,7 @@ def setup_and_launch( worker_fn=None, config=None ):
         args.world_size = args.nnodes * args.gpus_per_node
         args.batch_size = int( args.batch_size / args.world_size )
         args.workers = int( ( args.workers + args.gpus_per_node - 1 ) / args.gpus_per_node )
-        mp.spawn( worker_fn, nprocs=args.gpus_per_node, args=( args, config ) )
+        mp.spawn( worker_fn, nprocs=args.world_size, args=( args, config ) )
     print( "All Done.")
 
 

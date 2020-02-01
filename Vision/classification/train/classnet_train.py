@@ -15,7 +15,6 @@ import torchvision
 from torchvision import transforms, datasets
 from torch.utils.tensorboard import SummaryWriter
 
-
 def main_worker( gpu, args, config ):
     best_acc1 = 0
     args.writer = SummaryWriter( filename_suffix="{}".format( gpu ) )
@@ -25,6 +24,9 @@ def main_worker( gpu, args, config ):
                                  init_method="tcp://10.0.1.164:12345", 
                                  world_size=args.world_size, rank=gpu )
         print( "Process: {}, rank: {}, world_size: {}".format( gpu, dist.get_rank(), dist.get_world_size() ) )
+
+    # Set the default GPU, any tensors created on the 'default' GPU will use this device
+    torch.cuda.set_device( gpu )
 
     # Training set preprocessing and loader
     normalize = transforms.Normalize( [ 0.485, 0.456, 0.406 ],
@@ -63,11 +65,13 @@ def main_worker( gpu, args, config ):
                                               pin_memory=True )
 
 
-    model = torchvision.models.resnet101( pretrained=args.pretrained )
+    model = torchvision.models.resnet50( pretrained=args.pretrained )
     criterion = nn.CrossEntropyLoss().cuda( gpu )
-    optimizer = optim.Adam( model.parameters(), lr=args.learning_rate )
+    optimizer = optim.SGD( model.parameters(), 
+                           lr=args.learning_rate, 
+                           momentum=args.momentum, 
+                           weight_decay=args.weight_decay )
 
-    torch.cuda.set_device( gpu )
     model.cuda( gpu )
     if args.gpu is None:
         model = torch.nn.parallel.DistributedDataParallel( model, device_ids=[ gpu ], output_device=gpu )
@@ -198,8 +202,8 @@ def save_checkpoint( state, is_best=True, filename=None ):
 
 if __name__ == "__main__":
     config = Config()
-    config.train_path = "~/Datasets/ImageNet/train"
-    config.val_path = "~/Datasets/ImageNet/val"
+    config.train_path = "/home/vipul/Datasets/ImageNet/train"
+    config.val_path = "/home/vipul/Datasets/ImageNet/val"
     config.checkpoint_path = "checkpoint"
     config.checkpoint_name = "checkpoint.pth.tar"
     setup_and_launch( worker_fn=main_worker, config=config )
