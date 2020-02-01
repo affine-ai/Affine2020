@@ -2,80 +2,42 @@ import torch.nn as nn
 
 activations = nn.ModuleDict( [
     [ "leaky_relu", nn.LeakyReLU() ],
-    [ "relu", nn.ReLU() ]
-])
+    [ "relu", nn.ReLU() ],
+    [ "none", nn.Identity() ]
+] )
 
-class ConvBlock( nn.Module ):
-    """
-    A conv block with skip connection capability.
-    Can be used to implement a ResNet block.
-    Default padding is 'same'.
-    """
-    def __init__( self, inCh, outCh, k, p="same", s=1, activation="relu" ):
+class ResnetBlock( nn.Module ):
+    def __init__( self, kernel, in_channels, F1, F2, F3, activation_type="relu" ):
         super().__init__()
-        self.activationType = activation
-        p = ( k - 1 ) // 2 if p is "same" else p
-        self.add_module( "conv", nn.Conv2d( in_channels=inCh, \
-                                                   out_channels=outCh, \
-                                                   kernel_size=k, \
-                                                   padding=p, \
-                                                   stride=s, \
-                                                   bias=False ) )
-        self.add_module( "batch_norm", nn.BatchNorm2d( outCh ) )
-
-    def forward( self, x ):
-        x = self.conv( x )
-        x = self.batch_norm( x )
-        if self.activationType is not None:
-            x = activations[ self.activationType ]( x )
-        return x
-
-
-class ResNetBlock( nn.Module ):
-    def __init__( self, *kargs, **kwargs ):
-        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = F3
         self.identity = True
-        self.skipConnection = None
+        self.skip_conn = None
+        self.activation_type = activation_type
 
-        try:
-            self.activationType = kwargs[ "activation" ]
-        except:
-            self.activationType = "relu"
-
-        ( blocks, ) = kargs        
-        num_blocks = len( blocks )
-        
         self.layers = nn.ModuleList()
 
-        for num, block in enumerate( blocks ):
-            ( ch, k ) = block
-            if num == 0:
-                resBlockInputCh = ch
-                inputCh = ch
-            elif num == num_blocks - 1:
-                self.layers.append( ConvBlock( inputCh, ch, k, activation=None ) )
-            else:
-                self.layers.append( ConvBlock( inputCh, ch, k, activation=self.activationType ) )
-                inputCh = ch
+        self.layers.append( self.conv_unit( in_channels, F1, 1, ) )
+        self.layers.append( self.conv_unit( F1, F2, kernel ) )
+        self.layers.append( self.conv_unit( F2, F3, 1, activation_type="none" ) )
 
-        if resBlockInputCh == ch:
-            self.identity = True
-        else:
-            self.identity = False
-            self.skipConnection = ConvBlock( resBlockInputCh, ch, 1, activation=None )
-
+    def conv_unit( self, in_channels, out_channels, kernel, stride=1, padding=0, activation_type="relu" ):
+        return nn.Sequential( [ nn.Conv2d( in_channels=in_channels, 
+                                           out_channels=out_channels, 
+                                           kernel_size=kernel, 
+                                           stride=stride, 
+                                           padding=padding ),
+                                nn.BatchNorm2d( num_features=out_channels ),
+                                activations[ activation_type ] ] )
 
     def forward( self, x ):
-        if self.identity:
+        if self.in_channels == self.out_channels:
             residual = x
         else:
-            residual = self.skipConnection( x )
+            residual = self.conv_unit( x, self.out_channels, 1, activation_type="none" )
 
         for layer in self.layers:
             x = layer( x )
-
         x = x + residual
-
-        x = activations[ self.activationType ]( x )
-        return x
+        return activations[ self.activation_type ]( x )
 

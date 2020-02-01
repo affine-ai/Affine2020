@@ -1,8 +1,8 @@
-from YOLO.src.resnet_blocks import *
+from Affine.Vision.classification.src.resnet_blocks import ResnetBlock
 import torch
 
 
-resnet = ResNetBlock( [ ( 8, 0 ),
+resnet = ResnetBlock( [ ( 8, 0 ),
                         ( 16, 3 ),
                         ( 8, 1 ) ] )
 
