@@ -115,67 +115,52 @@ def main_worker( gpu, args, config ):
     args.writer.close()
 
 def train( loader, model, criterion, optimizer, epoch, gpu, args ):
+    model.train()
+    train_or_eval( True, gpu, loader, model, criterion, optimizer, args, epoch )
+
+def validate( loader, model, criterion, gpu, args ):
+    model.eval()
+    return train_or_eval( False, gpu, loader, model, criterion, None, args, 0 )
+
+def train_or_eval( train, gpu, loader, model, criterion, optimizer, args, epoch ):
     losses = AverageMeter( "Loss", ":.4e" )
     top1 = AverageMeter( "Accuracy1", ":6.2f" )
     top5 = AverageMeter( "Accuracy5", ":6.2f" )
     n_inputs = len( loader )
 
+    prefix = "Epoch:[{}]".format( epoch + 1 ) if train else "Test: "
     progress = ProgressMeter( n_inputs, \
                               [ losses, top1, top5 ], \
-                              prefix="Epoch:[{}]".format( epoch + 1 ) )
-    #Switch to training mode
-    model.train()
+                              prefix=prefix )
 
-    for i, ( images, target ) in enumerate( loader ):
-
-        images = images.cuda( gpu, non_blocking=True )
-        target = target.cuda( gpu, non_blocking=True )
-        output = model( images )
-        loss = criterion( output, target )
-
-        batch_size = images.size( 0 )
-        acc1, acc5 = accuracy( output, target, topk=( 1, 5 ) )
-        losses.update( loss.item(), batch_size )
-        top1.update( acc1[ 0 ], batch_size )
-        top5.update( acc5[ 0 ], batch_size )
-
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-        if i % 50 == 0:
-            args.writer.add_scalar( "Loss/train/gpu{}".format( gpu ), loss.item(), n_inputs * epoch + i )
-            progress.display( i )
-
-def validate( loader, model, criterion, gpu, args ):
-    losses = AverageMeter( "Loss", ":.4e" )
-    top1 = AverageMeter( "Accuracy1", ":6.2f" )
-    top5 = AverageMeter( "Accuracy5", ":6.2f" )
-
-    progress = ProgressMeter( len( loader ), \
-                              [ losses, top1, top5 ], \
-                              prefix="Test: " )
-
-    #Switch to eval mode
-    model.eval()
-
-    with torch.no_grad():
+    with torch.set_grad_enabled( mode=train ):
         for i, ( images, target ) in enumerate( loader ):
             images = images.cuda( gpu, non_blocking=True )
             target = target.cuda( gpu, non_blocking=True )
             output = model( images )
             loss = criterion( output, target )
 
+            batch_size = images.size( 0 )
             acc1, acc5 = accuracy( output, target, topk=( 1, 5 ) )
-            losses.update( loss.item(), images.size( 0 ) )
-            top1.update( acc1[ 0 ], images.size( 0 ) )
-            top5.update( acc5[ 0 ], images.size( 0 ) )
+            losses.update( loss.item(), batch_size )
+            top1.update( acc1[ 0 ], batch_size )
+            top5.update( acc5[ 0 ], batch_size )
 
             if i % 50 == 0:
                 progress.display( i )
+            
+            # All the code that needs to run only when training goes here
+            if train:
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
 
+                if i % 50 == 0:
+                    n_iter = n_inputs * epoch + i
+                    args.writer.add_scalar( "Loss/train/gpu{}".format( gpu ), loss.item(), n_iter )
+                    args.writer.add_scalar( "Accuracy/train/gpu{}".format( gpu ), acc1, n_iter )
+            # End of training specific code
     return top1.avg
-
 
 def accuracy( outputs, targets, topk=(1, ) ):
     with torch.no_grad():
@@ -192,6 +177,8 @@ def accuracy( outputs, targets, topk=(1, ) ):
         return res
 
 def adjust_learning_rate( optimizer, epoch, args ):
+    """learning rate drops by 1/10th every 30 epochs
+    """
     lr = args.learning_rate * ( 0.1 ** ( epoch // 30 ) )
     for param_group in optimizer.param_groups:
         param_group[ 'lr' ] = lr
