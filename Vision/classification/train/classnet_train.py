@@ -1,4 +1,5 @@
 from Affine.Common.utils.src.train_utils import parse_args, AverageMeter, ProgressMeter, Config, setup_and_launch
+from Affine.Vision.classification.src.darknet53 import Darknet53
 
 import time
 import os
@@ -65,7 +66,8 @@ def main_worker( gpu, args, config ):
                                               pin_memory=True )
 
 
-    model = torchvision.models.resnet50( pretrained=args.pretrained )
+    #model = torchvision.models.resnet50( pretrained=args.pretrained )
+    model = Darknet53()
     criterion = nn.CrossEntropyLoss().cuda( gpu )
     optimizer = optim.SGD( model.parameters(), 
                            lr=args.learning_rate, 
@@ -120,7 +122,11 @@ def train( loader, model, criterion, optimizer, epoch, gpu, args ):
 
 def validate( loader, model, criterion, gpu, args ):
     model.eval()
-    return train_or_eval( False, gpu, loader, model, criterion, None, args, 0 )
+    # All GPUs get the same copy of the model. There is no point in running
+    # validation on multiple GPUs
+    if gpu % args.gpus_per_node == 0:
+        return train_or_eval( False, gpu, loader, model, criterion, None, args, 0 )
+    return 0
 
 def train_or_eval( train, gpu, loader, model, criterion, optimizer, args, epoch ):
     losses = AverageMeter( "Loss", ":.4e" )

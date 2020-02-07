@@ -1,12 +1,12 @@
 import torch.nn as nn
 
 activations = nn.ModuleDict( [
-    [ "leaky_relu", nn.LeakyReLU() ],
-    [ "relu", nn.ReLU() ],
+    [ "leaky_relu", nn.LeakyReLU( inplace=True ) ],
+    [ "relu", nn.ReLU( inplace=True ) ],
     [ "none", nn.Identity() ], ] )
 
 class ResnetBlock( nn.Module ):
-    def __init__( self, in_channels, F1, F2, F3, kernel, activation_type="relu" ):
+    def __init__( self, in_channels, F1, F2, F3, kernel=3, activation_type="relu" ):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = F3
@@ -16,11 +16,16 @@ class ResnetBlock( nn.Module ):
 
         self.layers = nn.ModuleList()
 
-        self.layers.append( self.conv_unit( in_channels, F1, 1, ) )
-        self.layers.append( self.conv_unit( F1, F2, kernel ) )
-        self.layers.append( self.conv_unit( F2, F3, 1, activation_type="none" ) )
+        self.layers.append( self.conv_unit( in_channels, F1, 1, padding="valid" ) )
+        self.layers.append( self.conv_unit( F1, F2, kernel, padding="same" ) )
+        self.layers.append( self.conv_unit( F2, F3, 1, padding="valid", activation_type="none" ) )
 
-    def conv_unit( self, in_channels, out_channels, kernel, stride=1, padding=0, activation_type="relu" ):
+    @staticmethod
+    def conv_unit( in_channels, out_channels, kernel, stride=1, padding="same", activation_type="relu" ):
+        if padding == "same":
+            padding = int( ( kernel - 1 ) / 2 )
+        else:
+            padding = 0
         return nn.Sequential( nn.Conv2d( in_channels=in_channels, 
                                            out_channels=out_channels, 
                                            kernel_size=kernel, 
@@ -39,4 +44,3 @@ class ResnetBlock( nn.Module ):
             x = layer( x )
         x = x + residual
         return activations[ self.activation_type ]( x )
-

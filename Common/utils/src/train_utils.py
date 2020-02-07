@@ -6,6 +6,7 @@ import shutil
 import warnings
 import torch
 import torch.multiprocessing as mp
+import numpy as np
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -22,7 +23,7 @@ def parse_args():
     parser.add_argument( "--debug", default=False,
                          help="enable debug mode" )
 
-    # model parameters
+    # optimizer parameters
     parser.add_argument( "--learning-rate", "--lr", default=0.01, type=float,
                          help="learning rate" )
     parser.add_argument( "--momentum", default=0.9, type=float,
@@ -45,7 +46,7 @@ def parse_args():
     # distributed processing
     parser.add_argument( "--gpu", default=None, type=int, 
                          help="Force training on GPU id" )
-    parser.add_argument( "--workers", default=8, type=int,
+    parser.add_argument( "--workers", default=12, type=int,
                          help="number of data loading processes" )
     parser.add_argument( "--nnodes", default=1, type=int, 
                          help="number of nodes for distributed training" )
@@ -77,7 +78,9 @@ def setup_and_launch( worker_fn=None, config=None ):
     print( "{} GPUs found".format( gpus_per_node ) )
     args.gpus_per_node = gpus_per_node
 
+    np.random.seed( 42 )
     torch.manual_seed( 42 )
+    torch.cuda.manual_seed( 42 )
 
     config.checkpoint_write = os.path.join( config.checkpoint_path, config.checkpoint_name )
 
@@ -95,8 +98,9 @@ def setup_and_launch( worker_fn=None, config=None ):
             print( "\n***You have chosen to resume from a checkpoint\n***\n" )
 
     # print the provided config
-    print( "Config provided:\n================" )
+    print( "Config provided:\n================================" )
     config.dump()
+    print( "================================\n" )
 
     if args.gpu is not None:
         args.world_size = 1
@@ -149,4 +153,3 @@ class Config( object ):
         for key, value in self.__dict__.items():
             s = s + "{} = {}\n".format( key, value )
         print( s )
-
