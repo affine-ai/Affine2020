@@ -7,6 +7,7 @@ import pdb
 import sys
 import traceback
 import code
+import collections
 
 import numpy as np
 import torch
@@ -26,9 +27,19 @@ class Shell( cmd.Cmd ):
         self.image_size = 224
         self.curframe = sys._getframe().f_back
 
-    # Functions overriddein from base class go here
+    # Functions overridden from base class go here
     def precmd( self, line ):
         return line
+
+    def onecmd( self, line ):
+        if line.find( " " ) > 0:
+            args = line.split( " " )
+            map( str.strip, args )
+            c = "{}_{}".format( args.pop( 0 ), args.pop( 0 ) )
+            if ( callable( getattr( self, "do_" + c, None ) ) ):
+                line = "{} {}".format( c, " ".join( args ) )
+                print( "Executing {}".format( line ) )
+        cmd.Cmd.onecmd( self, line )
 
     def default( self, line ):
         if line[ :1 ] == '!':
@@ -100,15 +111,20 @@ class Shell( cmd.Cmd ):
 
         chkpoint = torch.load( file, map_location="cpu", )
         self.message( "Loading checkpoint file: {}".format( file ) )
+        
+        state_dict = chkpoint[ "model_state_dict" ]
+
         try:
-            model.load_state_dict( chkpoint[ "model_state_dict" ], strict=False )
-        except:
-            self.error( sys.exc_info()[ 0 ] )
+            model.load_state_dict( state_dict )
+        except RuntimeError:
+            new_state_dict = collections.OrderedDict( [ ( k[ 7: ], v ) for k,v in state_dict.items() 
+                                                                        if k.startswith( "module" ) ] )
+            model.load_state_dict( new_state_dict )
 
 
     # All local functions specific to this class go here
     def error( self, err_msg ):
-        print( "**", err_msg, file=self.stdout )
+        print( "***", err_msg, file=self.stdout )
 
     def message( self, msg ):
         print( msg, file=self.stdout )
@@ -123,7 +139,7 @@ class Shell( cmd.Cmd ):
             except KeyboardInterrupt:
                 self.message( "**Keyboard Interrupt" )
             except RuntimeError as e:
-                self.message( e )
+                self.error( e )
 
 
 if __name__ == "__main__":
