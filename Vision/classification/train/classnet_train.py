@@ -161,7 +161,7 @@ def train_or_eval( train, gpu, loader, model, criterion, optimizer, args, epoch 
                 loss.backward()
                 optimizer.step()
 
-                if i % 50 == 0:
+                if i % 100 == 0:
                     n_iter = n_inputs * epoch + i
                     args.writer.add_scalar( "Loss/train/gpu{}".format( gpu ), loss.item(), n_iter )
                     args.writer.add_scalar( "Accuracy/train/gpu{}".format( gpu ), acc1, n_iter )
