@@ -1,5 +1,5 @@
 from Affine.Common.utils.src.train_utils import parse_args, AverageMeter, ProgressMeter, Config, setup_and_launch
-from Affine.Vision.classification.src.darknet53 import Darknet53
+from Affine.Vision.classification.src.darknet53 import darknet
 
 import time
 import os
@@ -15,6 +15,14 @@ import torch.distributed as dist
 import torchvision
 from torchvision import transforms, datasets
 from torch.utils.tensorboard import SummaryWriter
+
+try:
+    import apex
+    from apex import amp
+    APEX_AVAILABLE = True
+except:
+    APEX_AVAILABLE = False
+
 
 def main_worker( gpu, args, config ):
     best_acc1 = 0
@@ -66,30 +74,37 @@ def main_worker( gpu, args, config ):
                                               pin_memory=True )
 
 
-    #model = torchvision.models.resnet50( pretrained=args.pretrained )
-    model = Darknet53()
+    model = darknet()
+    model.cuda( gpu )
+
     criterion = nn.CrossEntropyLoss().cuda( gpu )
     optimizer = optim.SGD( model.parameters(), 
                            lr=args.learning_rate, 
                            momentum=args.momentum, 
                            weight_decay=args.weight_decay )
 
-    model.cuda( gpu )
+    model, optimizer = amp.initialize( model, optimizer, 
+                                       opt_level="O2", 
+                                       keep_batchnorm_fp32=True )
+
     if args.gpu is None:
-        model = torch.nn.parallel.DistributedDataParallel( model, device_ids=[ gpu ], output_device=gpu )
+        model = apex.parallel.DistributedDataParallel( model )
 
     if args.resume:
         print( "Loading checkpoint {}".format( config.checkpoint_file ) )
         checkpoint = torch.load( config.checkpoint_file, map_location='cpu' )
         best_acc1 = checkpoint[ 'best_acc1' ]
-        model.load_state_dict( checkpoint[ "model_state_dict" ] )
-        optimizer.load_state_dict( checkpoint[ "optimizer_state_dict" ] )
+        model.load_state_dict( checkpoint[ "model" ] )
+        optimizer.load_state_dict( checkpoint[ "optimizer" ] )
+        amp.load_state_dict( checkpoint[ "amp" ] )
 
     if args.evaluate:
         validate( val_loader, model, criterion, gpu, args )
         return
 
+    ################################
     # Main training loop starts here
+    ################################
     time0 = time.time()
     for epoch in range( args.start_epoch, args.epochs ):
         if args.gpu is None:
@@ -107,9 +122,10 @@ def main_worker( gpu, args, config ):
             print( "Saving checkpoint")
             save_checkpoint( {
                 "epoch": epoch + 1,
-                "model_state_dict": model.state_dict(),
+                "model": model.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "amp": amp.state_dict(),
                 "best_acc1": best_acc1,
-                "optimizer_state_dict": optimizer.state_dict(),
             }, is_best, filename=config.checkpoint_write )
 
         time0 = time.time()
@@ -158,7 +174,8 @@ def train_or_eval( train, gpu, loader, model, criterion, optimizer, args, epoch 
             # All the code that needs to run only when training goes here
             if train:
                 optimizer.zero_grad()
-                loss.backward()
+                with amp.scale_loss( loss, optimizer ) as scaled_loss:
+                    scaled_loss.backward()
                 optimizer.step()
 
                 if i % 100 == 0:
