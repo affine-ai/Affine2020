@@ -1,5 +1,6 @@
+#! /usr/bin/env python3
 from Affine.Common.utils.src.train_utils import Config
-from Affine.Vision.classification.src.darknet53 import Darknet53
+from Affine.Vision.classification.src.darknet53 import Darknet53, darknet
 
 import os
 import cmd
@@ -42,7 +43,9 @@ class Shell( cmd.Cmd ):
             pass        
         self.exec_rc()
 
+    ##############################################
     # Functions overridden from base class go here
+    ##############################################
     def precmd( self, line ):
         return line
 
@@ -65,9 +68,10 @@ class Shell( cmd.Cmd ):
             code = compile( line + "\n", "<stdin>", "single" )
             saved_stdin = sys.stdin
             saved_stdout = sys.stdout
+            sys.stdin = self.stdin
+            sys.stdout = self.stdout
+
             try:
-                sys.stdin = self.stdin
-                sys.stdout = self.stdout
                 exec( code, globals, locals )
             finally:
                 sys.stdin = saved_stdin
@@ -76,9 +80,9 @@ class Shell( cmd.Cmd ):
             exec_info = sys.exc_info()[ :2 ]
             self.error( traceback.format_exception_only( *exec_info )[ -1 ].strip() )
 
-
+    ####################################
     # All do_* command functions go here
-
+    ####################################
     def do_quit( self, args ):
         """Exits the shell"""
         print( "Exiting shell" )
@@ -174,7 +178,9 @@ class Shell( cmd.Cmd ):
 
     do_show_fconv = do_show_firstconv
 
-    # Utility functions
+    ###########################
+    # Utility functions go here
+    ###########################
     def find_first_conv( self, net ):
         for layer in net.children():
             if isinstance( layer, nn.ModuleList ) or isinstance( layer, nn.Sequential ):
@@ -183,7 +189,9 @@ class Shell( cmd.Cmd ):
                 return layer
         return None
 
-    # All local functions specific to this class go here
+    ####################################################
+    # Helper functions to debugger functionality go here
+    ####################################################
     def error( self, err_msg ):
         print( "***", err_msg, file=self.stdout )
 
