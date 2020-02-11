@@ -14,6 +14,7 @@ from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 unused import
 
 import numpy as np
 import torch
+import torch.nn as nn
 import torchvision
 from torchvision import transforms
 from torchvision.models import *
@@ -128,7 +129,7 @@ class Shell( cmd.Cmd ):
         try:
             model.load_state_dict( state_dict )
         except RuntimeError:
-            new_state_dict = collections.OrderedDict( [ ( k[ 7: ], v ) for k,v in state_dict.items() 
+            new_state_dict = collections.OrderedDict( [ ( k[ 7: ], v ) for k, v in state_dict.items() 
                                                                         if k.startswith( "module" ) ] )
             model.load_state_dict( new_state_dict )
 
@@ -139,28 +140,31 @@ class Shell( cmd.Cmd ):
         plt.show( block=False )
     
     def do_show_firstconv( self, args ):
-        if args:
+        if not args:
+            net = model
+        else:
             try:
                 net = self.curframe.f_globals[ args ]
             except:
                 self.error( "Could not find specified model {}".format( args ) )
                 return
-        else:
-            net = model
-        try:
-            w = net.conv1.weight.detach()
-        except AttributeError:
-            w = net.layers[0][0].weight.detach()
 
+        conv = self.find_first_conv( net )
+        if not conv:
+            self.error( "No Conv2d layer found" )
+            return
+
+        w = conv.weight.detach()
         w = w.permute( 0, 2, 3, 1 )
+
         nfilters = w.size()[ 0 ]
         s = int( np.floor( np.sqrt( nfilters ) ) )
         
-        # if number of filters is not a perfect square, we pad the tensor so we can 
-        # display it in a square grid
-        if s ** 2 != nfilters:
+        # if the number of filters is not a perfect square, we pad 
+        # the tensor so that we can display it in a square grid
+        if pow( s, 2 ) < nfilters:
             s += 1
-            npad = s ** 2 - nfilters
+            npad = pow( s, 2, nfilters )
             w = torch.cat( ( w, torch.ones( ( npad, *w.size()[ 1: ] ) ) ), dim=0 )
 
         grid_w = torch.cat( tuple( torch.cat( tuple( w[ k ] for k in range( j * s, j * s + s ) ), dim=1 ) 
@@ -170,6 +174,14 @@ class Shell( cmd.Cmd ):
 
     do_show_fconv = do_show_firstconv
 
+    # Utility functions
+    def find_first_conv( self, net ):
+        for layer in net.children():
+            if isinstance( layer, nn.ModuleList ) or isinstance( layer, nn.Sequential ):
+                layer = self.find_first_conv( layer )
+            if isinstance( layer, nn.Conv2d ):
+                return layer
+        return None
 
     # All local functions specific to this class go here
     def error( self, err_msg ):
