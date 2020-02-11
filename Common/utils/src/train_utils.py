@@ -98,9 +98,9 @@ def setup_and_launch( worker_fn=None, config=None ):
             print( "\n***You have chosen to resume from a checkpoint\n***\n" )
 
     # print the provided config
-    print( "Config provided:\n================================" )
+    print( "==========Config provided==========" )
     config.dump()
-    print( "================================\n" )
+    print( "===================================\n" )
 
     if args.gpu is not None:
         args.world_size = 1
