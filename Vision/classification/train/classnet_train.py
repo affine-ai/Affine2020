@@ -1,10 +1,9 @@
-from Affine.Common.utils.src.train_utils import parse_args, AverageMeter, ProgressMeter, Config, setup_and_launch
 from Affine.Vision.classification.src.darknet53 import darknet
+from dataset_utils import load_imagenet_data as load_data, load_imagenet_val as load_val
+from train_utils import parse_args, AverageMeter, ProgressMeter, Config, setup_and_launch
 
-import time
-import os
+import os, time, datetime
 import warnings
-import datetime
 
 import torch
 import torch.nn as nn
@@ -12,7 +11,6 @@ import torch.optim as optim
 import torch.multiprocessing as mp
 from torch.multiprocessing import Process
 import torch.distributed as dist
-import torchvision
 from torchvision import transforms, datasets
 from torch.utils.tensorboard import SummaryWriter
 
@@ -34,45 +32,12 @@ def main_worker( gpu, args, config ):
                                  world_size=args.world_size, rank=gpu )
         print( "Process: {}, rank: {}, world_size: {}".format( gpu, dist.get_rank(), dist.get_world_size() ) )
 
-    # Set the default GPU, any tensors created on the 'default' GPU will use this device
+    # Set the default device, any tensors created by cuda by 'default' will use this device
     torch.cuda.set_device( gpu )
 
-    # Training set preprocessing and loader
-    normalize = transforms.Normalize( [ 0.485, 0.456, 0.406 ],
-                                      [ 0.229, 0.224, 0.225 ] )
-    
-    transform = transforms.Compose( [ transforms.RandomResizedCrop( 224 ), \
-                                      transforms.RandomHorizontalFlip(), \
-                                      transforms.ToTensor(),
-                                      normalize ] )
-
-    dataset = datasets.ImageFolder( config.train_path, transform=transform )
-
-    if args.gpu is None:
-        train_sampler = torch.utils.data.distributed.DistributedSampler( dataset, rank=gpu )
-    else:
-        train_sampler = None
-
-    train_loader = torch.utils.data.DataLoader( dataset, 
-                                                batch_size=args.batch_size, 
-                                                shuffle=( train_sampler is None ),
-                                                num_workers=args.workers,
-                                                pin_memory=True,
-                                                sampler=train_sampler )
-
-    # Validation set preprocessing and loader
-    val_transform = transforms.Compose( [ transforms.Resize( 224 ),
-                                          transforms.CenterCrop( 224 ),
-                                          transforms.ToTensor(),
-                                          normalize ] )
-    
-    valset = datasets.ImageFolder( config.val_path, transform=val_transform )
-    val_loader = torch.utils.data.DataLoader( valset, 
-                                              batch_size=args.batch_size, 
-                                              shuffle=False, 
-                                              num_workers=args.workers, 
-                                              pin_memory=True )
-
+    train_loader = load_data( config, args, gpu )
+    val_loader = load_val( config, args )
+    assert train_loader.dataset.classes == val_loader.dataset.classes
 
     model = darknet()
     model.cuda( gpu )
@@ -83,9 +48,11 @@ def main_worker( gpu, args, config ):
                            momentum=args.momentum, 
                            weight_decay=args.weight_decay )
 
+    # Nvidia documentation states - 
+    # "O2 exists mainly to support some internal use cases. Please prefer O1"
+    # https://github.com/NVIDIA/apex/tree/master/examples/imagenet
     model, optimizer = amp.initialize( model, optimizer, 
-                                       opt_level="O2", 
-                                       keep_batchnorm_fp32=True )
+                                       opt_level="O1" )
 
     if args.gpu is None:
         model = apex.parallel.DistributedDataParallel( model )
@@ -108,7 +75,7 @@ def main_worker( gpu, args, config ):
     time0 = time.time()
     for epoch in range( args.start_epoch, args.epochs ):
         if args.gpu is None:
-            train_sampler.set_epoch( epoch )
+            train_loader.sampler.set_epoch( epoch )
         
         train( train_loader, model, criterion, optimizer, epoch, gpu, args )
 
@@ -138,8 +105,8 @@ def train( loader, model, criterion, optimizer, epoch, gpu, args ):
 
 def validate( loader, model, criterion, gpu, args ):
     model.eval()
-    # All GPUs get the same copy of the model. There is no point in running
-    # validation on multiple GPUs
+    # All GPUs get the same copy of the model. Therefore, 
+    # running validation on one of them should be sufficient.
     if gpu % args.gpus_per_node == 0:
         return train_or_eval( False, gpu, loader, model, criterion, None, args, 0 )
     return 0
