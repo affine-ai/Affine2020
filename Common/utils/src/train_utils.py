@@ -129,6 +129,10 @@ class AverageMeter( object ):
         self.sum += val * n
         self.count += n
         self.avg = self.sum / self.count
+        # If self.avg is a NaN, reset it
+        if self.avg != self.avg:
+            self.avg = 0
+            self.count = 0
 
     def __str__( self ):
         fmt_str = "{name} {val" + self.fmt + "} ({avg" + self.fmt + "})"
