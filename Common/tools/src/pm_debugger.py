@@ -2,12 +2,9 @@
 from Affine.Common.utils.src.train_utils import Config
 from Affine.Vision.classification.src.darknet53 import Darknet53, darknet
 
-import os
-import cmd
-import pdb
-import sys
-import traceback
-import code
+import os, sys, code, traceback
+import cmd, readline
+import atexit
 import collections
 import matplotlib
 import matplotlib.pyplot as plt
@@ -17,14 +14,17 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torchvision
-from torchvision import transforms
+from torchvision import transforms, datasets
 from torchvision.models import *
 from PIL import Image
+
+from anytree import Node, RenderTree
+
 
 model = None
 image = None
 out = None
-
+config = Config()
 
 class Shell( cmd.Cmd ):
     def __init__( self, model, config ):
@@ -43,6 +43,9 @@ class Shell( cmd.Cmd ):
             pass        
         self.exec_rc()
 
+        self.init_history( histfile=".pmdebug_history" )
+        atexit.register( self.save_history, histfile=".pmdebug_history" )
+
     ##############################################
     # Functions overridden from base class go here
     ##############################################
@@ -56,7 +59,6 @@ class Shell( cmd.Cmd ):
             c = "{}_{}".format( args.pop( 0 ), args.pop( 0 ) )
             if ( callable( getattr( self, "do_" + c, None ) ) ):
                 line = "{} {}".format( c, " ".join( args ) )
-                print( "Executing {}".format( line ) )
         cmd.Cmd.onecmd( self, line )
 
     def default( self, line ):
@@ -125,10 +127,10 @@ class Shell( cmd.Cmd ):
             self.error( "Checkpoint file not found" )
             return
 
-        chkpoint = torch.load( file, map_location="cpu", )
+        chkpoint = torch.load( file, map_location="cpu" )
         self.message( "Loading checkpoint file: {}".format( file ) )
         
-        state_dict = chkpoint[ "model_state_dict" ]
+        state_dict = chkpoint[ "model" ]
 
         try:
             model.load_state_dict( state_dict )
@@ -140,18 +142,23 @@ class Shell( cmd.Cmd ):
     do_load_chkp = do_load_checkpoint
 
     def do_show_image( self, args ):
-        plt.imshow( image[ 0 ].permute( 1, 2, 0 ) )
+        img = self.load_from_context( args, default=image )
+        if img is None:
+            self.error( "Could not find image" )
+            return
+
+        if img.size( 0 ) == 1:
+            img = img.squeeze( 0 )
+        plt.imshow( img.permute( 1, 2, 0 ) )
         plt.show( block=False )
     
+    do_show_img = do_show_image
+
     def do_show_firstconv( self, args ):
-        if not args:
-            net = model
-        else:
-            try:
-                net = self.curframe.f_globals[ args ]
-            except:
-                self.error( "Could not find specified model {}".format( args ) )
-                return
+        net = self.load_from_context( args, default=model )
+        if net is None:
+            self.error( "Could not find specified model {}".format( args ) )
+            return
 
         conv = self.find_first_conv( net )
         if not conv:
@@ -189,11 +196,26 @@ class Shell( cmd.Cmd ):
                 return layer
         return None
 
+    def load_from_context( self, name, default=None ):
+        if not name:
+            return default
+
+        if name in self.curframe.f_globals:
+            return self.curframe.f_globals[ name ]
+        else:
+            return default
+
+    def make_tree( self, net, parent=None ):
+        if parent == None:
+            parent = Node( "Root" )
+        for module in net.children():
+            print( module )
+
     ####################################################
     # Helper functions to debugger functionality go here
     ####################################################
     def error( self, err_msg ):
-        print( "***", err_msg, file=self.stdout )
+        print( "***.{}".format( err_msg ), file=self.stdout )
 
     def message( self, msg ):
         print( msg, file=self.stdout )
@@ -215,6 +237,18 @@ class Shell( cmd.Cmd ):
             print( " ...Done" )
         print()
 
+    def init_history( self, histfile ):
+        try:
+            readline.read_history_file( histfile )
+        except FileNotFoundError:
+            pass        
+        readline.set_history_length( 2000 )
+        readline.set_auto_history( True )
+
+    def save_history( self, histfile ):
+        print( "Saving history" )
+        readline.write_history_file( histfile )
+
     def _cmdloop( self, intro_header ):
         while True:
             try:
@@ -229,11 +263,6 @@ class Shell( cmd.Cmd ):
 
 
 if __name__ == "__main__":
-    config = Config()
-    config.checkpoint_path = "/home/vipul/Affine/Vision/classification/train/checkpoint"
-    config.checkpoint_name = "checkpoint.pth.tar"
-    config.image_path = "/home/vipul/Affine/Vision/classification/test/images/"
-
     shell = Shell( model, config )
-    shell.prompt = '> '
+    shell.prompt = '>> '
     shell._cmdloop( "Welcome to the shell" )
