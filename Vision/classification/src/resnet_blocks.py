@@ -15,7 +15,8 @@ def conv_unit( in_channels, out_channels, kernel, stride=1, padding="same", acti
                                         out_channels=out_channels, 
                                         kernel_size=kernel, 
                                         stride=stride, 
-                                        padding=padding ),
+                                        padding=padding,
+                                        bias=False ),
                             nn.BatchNorm2d( num_features=out_channels ),
                             activations[ activation_type ] )
 
@@ -58,26 +59,27 @@ class ResnetBasic( nn.Module ):
                                 out_channels=channels, 
                                 kernel_size=kernel, 
                                 stride=1, 
-                                padding=padding )
+                                padding=padding,
+                                bias=False )
         self.bn1 = nn.BatchNorm2d( num_features=channels )
-        self.relu1 = activations[ activation_type ]
 
         self.conv2 = nn.Conv2d( in_channels=channels, 
                                 out_channels=channels, 
                                 kernel_size=kernel, 
                                 stride=1, 
-                                padding=padding )
+                                padding=padding,
+                                bias=False )
         self.bn2 = nn.BatchNorm2d( num_features=channels )
-        self.relu2 = activations[ activation_type ]
+        self.relu = activations[ activation_type ]
 
     def forward( self, x ):
         residual = x
         x = self.conv1( x )
         x = self.bn1( x )
-        x = self.relu1( x )
+        x = self.relu( x )
         x = self.conv2( x )
         x = self.bn2( x )
 
         x = x + residual
-        return self.relu2( x )
+        return self.relu( x )
     
