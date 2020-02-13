@@ -1,5 +1,4 @@
 #! /usr/bin/env python3
-from Affine.Common.utils.src.train_utils import Config
 from Affine.Vision.classification.src.darknet53 import Darknet53, darknet
 
 import os, sys, code, traceback
@@ -18,26 +17,69 @@ from torchvision import transforms, datasets
 from torchvision.models import *
 from PIL import Image
 
-from anytree import Node, RenderTree
-
 
 model = None
 image = None
 out = None
+
+class Config( object ):
+    pass 
+
 config = Config()
 
+class LayerMeta( object ):
+    def __init__( self, module ):
+        self.out = None
+        self.fn = None
+        self.hook = module.register_forward_hook( self.hook_fn )
+        print( "Registering forward hook" )
+
+    def hook_fn( self, module, input, output ):
+        self.out = output.clone().detach()
+
+    def available( self ):
+        if self.out is not None:
+            return True
+        return False
+
+    def data( self ):
+        if self.fn:
+            try:
+                return self.fn( self.out )
+            except:
+                return None
+        else:
+            return self.out
+    
+    def size( self ):
+        return self.out.size()
+
+    def dim( self ):
+        return self.out.dim()
+
+    def mean( self ):
+        return self.out.mean()
+
+    def modify( self, fn ):
+        self.fn = fn
+
+    def close( self ):
+        self.hook.remove()
+        print( "Removing hooks" )
+
 class Shell( cmd.Cmd ):
-    def __init__( self, model, config ):
+    def __init__( self, config ):
         super().__init__()
-        self.model = model
         self.config = config
         self.image_size = 224
         self.rc_lines = []
-
-        self.curframe = sys._getframe().f_back
+        self.device = "cpu"
+        self.cur_layer = None
+        self.output_hooked = None
+        self.cur_frame = sys._getframe().f_back
 
         try:
-            with open( ".modeldebugrc" ) as rc_file:
+            with open( ".pmdebugrc" ) as rc_file:
                 self.rc_lines.extend( rc_file )
         except OSError:
             pass        
@@ -64,8 +106,8 @@ class Shell( cmd.Cmd ):
     def default( self, line ):
         if line[ :1 ] == '!':
             line  = line[ 1: ]
-        locals = self.curframe.f_locals
-        globals = self.curframe.f_globals
+        locals = self.cur_frame.f_locals
+        globals = self.cur_frame.f_globals
         try:
             code = compile( line + "\n", "<stdin>", "single" )
             saved_stdin = sys.stdin
@@ -82,6 +124,7 @@ class Shell( cmd.Cmd ):
             exec_info = sys.exc_info()[ :2 ]
             self.error( traceback.format_exception_only( *exec_info )[ -1 ].strip() )
 
+
     ####################################
     # All do_* command functions go here
     ####################################
@@ -90,6 +133,7 @@ class Shell( cmd.Cmd ):
         print( "Exiting shell" )
         raise SystemExit
 
+
     def do_summary( self, args ):
         """Prints pytorch model summary"""
         try:
@@ -97,6 +141,7 @@ class Shell( cmd.Cmd ):
                 print( "{}  {}".format( layer._get_name(), layer.size() ) )
         except:
             self.error( sys.exc_info()[ 1 ] )
+
 
     def do_load_image( self, args ):
         """load a single image"""
@@ -141,6 +186,7 @@ class Shell( cmd.Cmd ):
 
     do_load_chkp = do_load_checkpoint
 
+
     def do_show_image( self, args ):
         img = self.load_from_context( args, default=image )
         if img is None:
@@ -153,6 +199,7 @@ class Shell( cmd.Cmd ):
         plt.show( block=False )
     
     do_show_img = do_show_image
+
 
     def do_show_firstconv( self, args ):
         net = self.load_from_context( args, default=model )
@@ -185,6 +232,64 @@ class Shell( cmd.Cmd ):
 
     do_show_fconv = do_show_firstconv
 
+
+    def do_grab_output( self, args ):
+        layer = self.load_from_context( args, self.cur_layer )
+        if layer == None:
+            print( "No feasible layer found")
+            return
+        self.output_hooked = LayerMeta( layer )
+        
+    do_grab_out = do_grab_output
+    do_grab_hook = do_grab_output
+
+
+    def do_release_output( self, args ):
+        self.output_hooked.close()
+        self.output_hooked = None
+
+    do_rel_out = do_release_output
+    do_rel_hook = do_release_output
+
+
+    def do_plot_hook( self, args ):
+        if self.output_hooked == None or self.output_hooked.available() == False:
+            print( "No hooked outputs available")
+            return
+    
+        if self.output_hooked.dim() == 4:
+            data = self.output_hooked.data().squeeze( 0 )
+            s0 = data.size( 0 )
+            index = np.arange( s0 )
+            y_data = [ torch.mean( data[ t ] ).float().item() for t in range( s0 ) ]
+            top5 = self.top_n( 5, y_data )
+            plt.bar( index, y_data, align="center", width=2 )
+            for i, v in top5:
+                plt.text( i, v, "{}".format( i ) )
+            plt.title( "Histogram of hooked data" )
+            plt.grid()
+            plt.show( block=False )
+
+    def do_modify_hook( self, args ):
+        if args == "relu":
+            fn = torch.nn.ReLU( inplace=True )
+        elif args == "mean":
+            fn = torch.mean
+        elif args == "none" or args == "None":
+            fn = None
+        else:
+            fn = self.load_from_context( args, default=None )
+            if not fn:
+                print( "Could not find function {}".format( args ) )
+                return
+        if self.output_hooked == None:
+            print( "No hooks available" )
+        
+        self.output_hooked.modify( fn )
+
+    do_mod_hook = do_modify_hook
+
+
     ###########################
     # Utility functions go here
     ###########################
@@ -200,16 +305,14 @@ class Shell( cmd.Cmd ):
         if not name:
             return default
 
-        if name in self.curframe.f_globals:
-            return self.curframe.f_globals[ name ]
+        if name in self.cur_frame.f_globals:
+            return self.cur_frame.f_globals[ name ]
         else:
             return default
 
-    def make_tree( self, net, parent=None ):
-        if parent == None:
-            parent = Node( "Root" )
-        for module in net.children():
-            print( module )
+    def top_n( self, n, ar ):
+        index = np.argpartition( ar, -n )[ -n: ]
+        return [ ( i, ar[ i ] ) for i in index ]
 
     ####################################################
     # Helper functions to debugger functionality go here
@@ -263,6 +366,6 @@ class Shell( cmd.Cmd ):
 
 
 if __name__ == "__main__":
-    shell = Shell( model, config )
+    shell = Shell( config )
     shell.prompt = '>> '
     shell._cmdloop( "Welcome to the shell" )
