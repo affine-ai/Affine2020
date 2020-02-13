@@ -87,13 +87,12 @@ def main_worker( gpu, args, config ):
 
         if args.gpu or ( gpu % args.world_size == 0 ):
             print( "Saving checkpoint")
-            save_checkpoint( {
-                "epoch": epoch + 1,
-                "model": model.state_dict(),
-                "optimizer": optimizer.state_dict(),
-                "amp": amp.state_dict(),
-                "best_acc1": best_acc1,
-            }, is_best, filename=config.checkpoint_write )
+            save_checkpoint( { "epoch": epoch + 1,
+                               "model": model.state_dict(),
+                               "optimizer": optimizer.state_dict(),
+                               "amp": amp.state_dict(),
+                               "best_acc1": best_acc1,
+                             }, is_best, filename=config.checkpoint_write )
 
         time0 = time.time()
     
@@ -118,9 +117,7 @@ def train_or_eval( train, gpu, loader, model, criterion, optimizer, args, epoch 
     n_inputs = len( loader )
 
     prefix = "Epoch:[{}]".format( epoch + 1 ) if train else "Test: "
-    progress = ProgressMeter( n_inputs, \
-                              [ losses, top1, top5 ], \
-                              prefix=prefix )
+    progress = ProgressMeter( n_inputs, [ losses, top1, top5 ], prefix=prefix )
 
     with torch.set_grad_enabled( mode=train ):
         for i, ( images, target ) in enumerate( loader ):
@@ -135,7 +132,7 @@ def train_or_eval( train, gpu, loader, model, criterion, optimizer, args, epoch 
             top1.update( acc1[ 0 ], batch_size )
             top5.update( acc5[ 0 ], batch_size )
 
-            if i % 50 == 0:
+            if i % 100 == 0:
                 progress.display( i )
             
             # All the code that needs to run only when training goes here
