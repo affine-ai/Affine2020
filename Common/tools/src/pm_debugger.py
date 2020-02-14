@@ -21,7 +21,6 @@ from PIL import Image
 # Disable the top menubar on plots
 matplotlib.rcParams[ "toolbar" ] = "None"
 
-
 model = None
 image = None
 out = None
@@ -30,6 +29,32 @@ class Config( object ):
     pass 
 
 config = Config()
+
+
+class GraphWindow( object ):
+    def __init__( self ):
+        self.fig = plt.figure()
+
+    def reset_window( self ):
+        for ax in self.fig.axes:
+            self.fig.delaxes( ax )
+
+    def current_axes( self ):
+        self.reset_window()
+        return self.fig.subplots( 1, 1 )
+
+    def imshow( self, image ):
+        ax = self.current_axes()
+        ax.imshow( image )
+        self.show_graph()
+
+    def show_graph( self ):
+        self.fig.canvas.draw()
+        self.fig.show()
+
+    def close( self ):
+        plt.close()
+
 
 class LayerMeta( object ):
     def __init__( self, module ):
@@ -86,6 +111,8 @@ class Shell( cmd.Cmd ):
         self.output_hooked = None
         self.cur_frame = sys._getframe().f_back
 
+        self.fig = GraphWindow()
+
         try:
             with open( ".pmdebugrc" ) as rc_file:
                 self.rc_lines.extend( rc_file )
@@ -139,6 +166,7 @@ class Shell( cmd.Cmd ):
     def do_quit( self, args ):
         """Exits the shell"""
         print( "Exiting shell" )
+        plt.close()
         raise SystemExit
 
 
@@ -203,8 +231,8 @@ class Shell( cmd.Cmd ):
 
         if img.size( 0 ) == 1:
             img = img.squeeze( 0 )
-        plt.imshow( img.permute( 1, 2, 0 ) )
-        plt.show( block=False )
+
+        self.fig.imshow( img.permute( 1, 2, 0 ) )
     
     do_show_img = do_show_image
 
@@ -235,8 +263,7 @@ class Shell( cmd.Cmd ):
 
         grid_w = torch.cat( tuple( torch.cat( tuple( w[ k ] for k in range( j * s, j * s + s ) ), dim=1 ) 
                                                                for j in range( s ) ), dim=0 )
-        plt.imshow( grid_w )
-        plt.show( block=False )
+        self.fig.imshow( grid_w )
 
     do_show_fconv = do_show_firstconv
 
@@ -272,12 +299,14 @@ class Shell( cmd.Cmd ):
             y_data = list( map( lambda x: torch.mean( x ).float().item(), data[ : ] ) )
             
             top5 = self.top_n( 5, y_data )
-            plt.bar( index, y_data, align="center", width=1 )
+
+            ax = self.fig.current_axes()
+            ax.bar( index, y_data, align="center", width=1 )
             for i, v in top5:
-                plt.text( i, v, "{}".format( i ) )
-            plt.title( "Histogram of hooked data" )
-            plt.grid()
-            plt.show( block=False )
+                ax.text( i, v, "{}".format( i ) )
+            ax.set_title( "Histogram of hooked data" )
+            ax.grid()
+            self.fig.show_graph()
         else:
             print( "Unsupported data dimensions" )
 
