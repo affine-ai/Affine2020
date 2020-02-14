@@ -18,6 +18,10 @@ from torchvision.models import *
 from PIL import Image
 
 
+# Disable the top menubar on plots
+matplotlib.rcParams[ "toolbar" ] = "None"
+
+
 model = None
 image = None
 out = None
@@ -31,10 +35,10 @@ class LayerMeta( object ):
     def __init__( self, module ):
         self.out = None
         self.fn = None
-        self.hook = module.register_forward_hook( self.hook_fn )
+        self.fhook = module.register_forward_hook( self.fhook_fn )
         print( "Registering forward hook" )
 
-    def hook_fn( self, module, input, output ):
+    def fhook_fn( self, module, input, output ):
         self.out = output.clone().detach()
 
     def available( self ):
@@ -42,8 +46,8 @@ class LayerMeta( object ):
             return True
         return False
 
-    def data( self ):
-        if self.fn:
+    def data( self, raw=False ):
+        if self.fn and raw is False:
             try:
                 return self.fn( self.out )
             except:
@@ -51,21 +55,25 @@ class LayerMeta( object ):
         else:
             return self.out
     
-    def size( self ):
-        return self.out.size()
+    def size( self, dim=None ):
+        if not dim:
+            return self.out.size()
+        else:
+            return self.out.size( dim )
 
     def dim( self ):
         return self.out.dim()
 
-    def mean( self ):
-        return self.out.mean()
-
     def modify( self, fn ):
-        self.fn = fn
+        if callable( fn ):
+            self.fn = fn
+        else:
+            print( "Modifier is not a function" )
 
     def close( self ):
-        self.hook.remove()
+        self.fhook.remove()
         print( "Removing hooks" )
+
 
 class Shell( cmd.Cmd ):
     def __init__( self, config ):
@@ -241,7 +249,6 @@ class Shell( cmd.Cmd ):
         self.output_hooked = LayerMeta( layer )
         
     do_grab_out = do_grab_output
-    do_grab_hook = do_grab_output
 
 
     def do_release_output( self, args ):
@@ -249,32 +256,36 @@ class Shell( cmd.Cmd ):
         self.output_hooked = None
 
     do_rel_out = do_release_output
-    do_rel_hook = do_release_output
+    do_rel_fhook = do_release_output
 
 
-    def do_plot_hook( self, args ):
+    def do_show_fhook( self, args ):
         if self.output_hooked == None or self.output_hooked.available() == False:
             print( "No hooked outputs available")
             return
     
-        if self.output_hooked.dim() == 4:
+        if self.output_hooked.dim() == 4 and self.output_hooked.size( 0 ) == 1:
             data = self.output_hooked.data().squeeze( 0 )
-            s0 = data.size( 0 )
-            index = np.arange( s0 )
-            y_data = [ torch.mean( data[ t ] ).float().item() for t in range( s0 ) ]
+            index = np.arange( data.size( 0 ) )
+            y_data = list( map( lambda x: torch.mean( x ).float().item(), data[ : ] ) ) 
             top5 = self.top_n( 5, y_data )
-            plt.bar( index, y_data, align="center", width=2 )
+            plt.bar( index, y_data, align="center", width=1 )
             for i, v in top5:
                 plt.text( i, v, "{}".format( i ) )
             plt.title( "Histogram of hooked data" )
             plt.grid()
             plt.show( block=False )
 
-    def do_modify_hook( self, args ):
+    do_show_grab = do_show_fhook
+
+
+    def do_modify_fhook( self, args ):
         if args == "relu":
             fn = torch.nn.ReLU( inplace=True )
         elif args == "mean":
-            fn = torch.mean
+            fn = self.mean4d
+        elif args == "max":
+            fn = self.max4d
         elif args == "none" or args == "None":
             fn = None
         else:
@@ -287,7 +298,7 @@ class Shell( cmd.Cmd ):
         
         self.output_hooked.modify( fn )
 
-    do_mod_hook = do_modify_hook
+    do_mod_fhook = do_modify_fhook
 
 
     ###########################
@@ -313,6 +324,20 @@ class Shell( cmd.Cmd ):
     def top_n( self, n, ar ):
         index = np.argpartition( ar, -n )[ -n: ]
         return [ ( i, ar[ i ] ) for i in index ]
+
+    ## FIXBUG: the following function only works when when first dim is 1
+    ## May need to be fixed later to deal with batch inputs
+    def op_4d( self, data, op ):
+        """Only works with 4D tensors for now. Takes the op of last 2 dimensions
+        Returns a 2d tensor along the first two dimensions of the input tensor"""
+        mean_map = map( lambda x: op( x ).float().item(), data[0][:] )
+        return torch.tensor( list( mean_map ) )
+
+    def mean4d( self, data ):
+        return self.op_4d( data, op=torch.mean )
+
+    def max4d( self, data ):
+        return self.op_4d( data, op=torch.max )
 
     ####################################################
     # Helper functions to debugger functionality go here
