@@ -28,7 +28,7 @@ def parse_args():
                          help="learning rate" )
     parser.add_argument( "--momentum", default=0.9, type=float,
                          help="momentum")
-    parser.add_argument( "--weight-decay", default=1e-4, type=float,
+    parser.add_argument( "--weight-decay", default=0, type=float,
                          help="weight decay" )
 
     # training parameters

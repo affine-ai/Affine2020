@@ -56,7 +56,7 @@ class LayerMeta( object ):
             return self.out
     
     def size( self, dim=None ):
-        if not dim:
+        if dim is None:
             return self.out.size()
         else:
             return self.out.size( dim )
@@ -267,7 +267,10 @@ class Shell( cmd.Cmd ):
         if self.output_hooked.dim() == 4 and self.output_hooked.size( 0 ) == 1:
             data = self.output_hooked.data().squeeze( 0 )
             index = np.arange( data.size( 0 ) )
-            y_data = list( map( lambda x: torch.mean( x ).float().item(), data[ : ] ) ) 
+            # The following statement is invariant to data of dimension ( 1 ) such as 
+            # a list of tensors
+            y_data = list( map( lambda x: torch.mean( x ).float().item(), data[ : ] ) )
+            
             top5 = self.top_n( 5, y_data )
             plt.bar( index, y_data, align="center", width=1 )
             for i, v in top5:
@@ -275,6 +278,8 @@ class Shell( cmd.Cmd ):
             plt.title( "Histogram of hooked data" )
             plt.grid()
             plt.show( block=False )
+        else:
+            print( "Unsupported data dimensions" )
 
     do_show_grab = do_show_fhook
 
