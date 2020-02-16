@@ -4,7 +4,7 @@ from Affine.Vision.classification.src.darknet53 import Darknet53, darknet
 import os, sys, code, traceback
 import cmd, readline
 import atexit
-import collections
+from collections import OrderedDict
 import matplotlib
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 unused import
@@ -55,12 +55,109 @@ class GraphWindow( object ):
     def close( self ):
         plt.close()
 
+class ModelMeta( object ):
+    def __init__( self, model ):
+        self.model = model
+        self.cur_module = None
+        self.modules = OrderedDict()
 
-class LayerMeta( object ):
-    def __init__( self, module ):
+    def init_module( self ):
+        id, module = self.find_last_instance( self.model, module=nn.ReLU )
+        module_info = ModuleMeta( module, id )
+        self.modules[ tuple( id ) ] = module_info
+        self.cur_module = module_info
+        return module_info
+
+    def get_cur_module( self ):
+        if not self.cur_module:
+            self.init_module()
+        return self.cur_module
+
+    def up( self ):
+        def _dec( n ):
+            i = n.pop()
+            if i > 0:
+                i -= 1
+                n.append( i )
+                return n
+            else:
+                if n: 
+                    n = _dec( n )
+                    m = list( self.model.children() )
+                    for i in n:
+                        m = m[ i ]
+                    n.append( len( list( m.children() ) ) - 1 )
+                else:
+                    n.append( 0 )
+                return n
+
+        id = self.cur_module.id
+        try:
+            id = _dec( id )
+        except:
+            print( "already at topmost" )
+            return
+
+        if tuple( id ) in self.modules:
+            self.cur_module = self.modules[ tuple( id ) ]
+        else:
+            id, module = self.find_instance( self.model, key=id )
+            self.cur_module = ModuleMeta( module, id )
+            self.modules[ tuple( id ) ] = module
+        print( "Current moduel is {}: {}".format( id, module ) )
+
+    def find_instance( self, net, key, cur_frame=[], found_frame=[] ):
+        found = None
+
+        for i, l in enumerate( net.children() ):
+            cur_frame.append( i )
+
+            if cur_frame == key:
+                found = l
+                found_frame = cur_frame.copy()
+                cur_frame.pop()
+                return found_frame, found
+
+            found_frame, found = self.find_instance( l, key=key, 
+                                                        cur_frame=cur_frame, 
+                                                        found_frame=found_frame )
+            cur_frame.pop()
+        return found_frame, found
+
+    def find_last_instance( self, net, module=nn.Conv2d, cur_frame=[], found_frame=[] ):
+        """This method does a depth first search and finds the last instance of the
+        specifiied module in the tree"""
+        found = None
+        ret_found = None
+
+        for i, l in enumerate( net.children() ):
+            cur_frame.append( i )
+
+            if isinstance( l, module ):
+                found = l
+                if cur_frame > found_frame:
+                    found_frame = cur_frame.copy()
+
+            found_frame, ret_found = self.find_last_instance( l, module=module,
+                                                            cur_frame=cur_frame, 
+                                                            found_frame=found_frame )
+            if isinstance( ret_found, module ):
+                found = ret_found
+            cur_frame.pop()
+        return found_frame, found
+
+
+class ModuleMeta( object ):
+    def __init__( self, module, id=[] ):
         self.out = None
         self.fn = None
-        self.fhook = module.register_forward_hook( self.fhook_fn )
+        self.module = module
+        self.id = id
+
+    def register_forward_hook( self, hook_fn=None ):
+        if hook_fn is None:
+            hook_fn = self.fhook_fn
+        self.fhook = self.module.register_forward_hook( hook_fn )
         print( "Registering forward hook" )
 
     def fhook_fn( self, module, input, output ):
@@ -107,6 +204,8 @@ class Shell( cmd.Cmd ):
         self.image_size = 224
         self.rc_lines = []
         self.device = "cpu"
+        self.models = {}
+        self.cur_model = None
         self.cur_layer = None
         self.output_hooked = None
         self.cur_frame = sys._getframe().f_back
@@ -169,7 +268,6 @@ class Shell( cmd.Cmd ):
         plt.close()
         raise SystemExit
 
-
     def do_summary( self, args ):
         """Prints pytorch model summary"""
         try:
@@ -178,7 +276,19 @@ class Shell( cmd.Cmd ):
         except:
             self.error( sys.exc_info()[ 1 ] )
 
+    def do_set_model( self, args ):
+        name = args if args else "model"
+        model = self.load_from_context( name )
+        if model is None:
+            self.error( "Could not find specified model" )
 
+        if name in self.models:
+            self.cur_model = self.models[ name ]
+        else:
+            self.cur_model = ModelMeta( model )
+            self.models[ name ] = self.cur_model
+        self.message( "Setting model to: {}".format( name ) )
+    
     def do_load_image( self, args ):
         """load a single image"""
         global image
@@ -187,7 +297,7 @@ class Shell( cmd.Cmd ):
         if not os.path.isfile( image_path ):
             print( "Image not found")
             return
-        print( "Loading image {}".format( image_path ) )
+        self.message( "Loading image {}".format( image_path ) )
         image = Image.open( image_path )
         transform = transforms.Compose( [ transforms.Resize( ( self.image_size, self.image_size ) ),
                                             transforms.ToTensor() ] )
@@ -216,7 +326,7 @@ class Shell( cmd.Cmd ):
         try:
             model.load_state_dict( state_dict )
         except RuntimeError:
-            new_state_dict = collections.OrderedDict( [ ( k[ 7: ], v ) for k, v in state_dict.items() 
+            new_state_dict = OrderedDict( [ ( k[ 7: ], v ) for k, v in state_dict.items() 
                                                                         if k.startswith( "module" ) ] )
             model.load_state_dict( new_state_dict )
 
@@ -229,21 +339,82 @@ class Shell( cmd.Cmd ):
             self.error( "Could not find image" )
             return
 
-        if img.size( 0 ) == 1:
-            img = img.squeeze( 0 )
+        if isinstance( img, torch.Tensor ):
+            if img.size( 0 ) == 1:
+                img = img.squeeze( 0 )
+            if img.size( 2 ) != 3:
+                img = img.permute( 1, 2, 0 )
+        elif isinstance( img, np.ndarray ):
+            if img.shape[ 0 ] == 1:
+                img = img[ 0 ]
+            if img.shape[ 2 ] != 3:
+                img = img.transpose( 1, 2, 0 )
+        else:
+            self.error( "Unsupported image type" )
+            return
 
-        self.fig.imshow( img.permute( 1, 2, 0 ) )
+        self.fig.imshow( img )
     
     do_show_img = do_show_image
 
 
-    def do_show_firstconv( self, args ):
+    def do_grab_output( self, args ):
+        layer = self.load_from_context( args, self.cur_layer )
+        if layer == None:
+            self.error( "No feasible layer found")
+            return
+        self.output_hooked = ModuleMeta( layer )
+        self.output_hooked.register_forward_hook()
+        
+    do_grab_out = do_grab_output
+
+
+    def do_release_output( self, args ):
+        self.output_hooked.close()
+        self.output_hooked = None
+
+    do_rel_out = do_release_output
+    do_rel_fhook = do_release_output
+
+
+    def do_show_fhook( self, args ):
+        if self.output_hooked == None or self.output_hooked.available() == False:
+            self.error( "No hooked outputs available")
+            return
+        self.display_module_data( self.output_hooked )
+
+    do_show_grab = do_show_fhook
+
+
+    def do_modify_fhook( self, args ):
+        if args == "relu":
+            fn = torch.nn.ReLU( inplace=True )
+        elif args == "mean":
+            fn = self.mean4d
+        elif args == "max":
+            fn = self.max4d
+        elif args == "none" or args == "None":
+            fn = None
+        else:
+            fn = self.load_from_context( args, default=None )
+            if not fn:
+                self.error( "Could not find function {}".format( args ) )
+                return
+        if self.output_hooked == None:
+            self.message( "No hooks available" )
+        
+        self.output_hooked.modify( fn )
+
+    do_mod_fhook = do_modify_fhook
+
+
+    def do_show_weights_firstconv( self, args ):
         net = self.load_from_context( args, default=model )
         if net is None:
             self.error( "Could not find specified model {}".format( args ) )
             return
 
-        conv = self.find_first_conv( net )
+        conv = self.find_first_instance( net, module=nn.Conv2d )
         if not conv:
             self.error( "No Conv2d layer found" )
             return
@@ -265,86 +436,48 @@ class Shell( cmd.Cmd ):
                                                                for j in range( s ) ), dim=0 )
         self.fig.imshow( grid_w )
 
-    do_show_fconv = do_show_firstconv
+    do_show_wfconv = do_show_weights_firstconv
 
 
-    def do_grab_output( self, args ):
-        layer = self.load_from_context( args, self.cur_layer )
-        if layer == None:
-            print( "No feasible layer found")
+    def do_show_layer( self, args ):
+        img = self.load_from_context( "image" )
+        if img is None:
+            self.error( "Please laod an input image first" )
             return
-        self.output_hooked = LayerMeta( layer )
         
-    do_grab_out = do_grab_output
-
-
-    def do_release_output( self, args ):
-        self.output_hooked.close()
-        self.output_hooked = None
-
-    do_rel_out = do_release_output
-    do_rel_fhook = do_release_output
-
-
-    def do_show_fhook( self, args ):
-        if self.output_hooked == None or self.output_hooked.available() == False:
-            print( "No hooked outputs available")
+        if args not in self.models and "model" not in self.models:
+            self.error( "Could not find {}".format( args ) )
+            self.message( "Please set a model first" )
             return
-    
-        if self.output_hooked.dim() == 4 and self.output_hooked.size( 0 ) == 1:
-            data = self.output_hooked.data().squeeze( 0 )
-            index = np.arange( data.size( 0 ) )
-            # The following statement is invariant to data of dimension ( 1 ) such as 
-            # a list of tensors
-            y_data = list( map( lambda x: torch.mean( x ).float().item(), data[ : ] ) )
-            
-            top5 = self.top_n( 5, y_data )
-
-            ax = self.fig.current_axes()
-            ax.bar( index, y_data, align="center", width=1 )
-            for i, v in top5:
-                ax.text( i, v, "{}".format( i ) )
-            ax.set_title( "Histogram of hooked data" )
-            ax.grid()
-            self.fig.show_graph()
-        else:
-            print( "Unsupported data dimensions" )
-
-    do_show_grab = do_show_fhook
-
-
-    def do_modify_fhook( self, args ):
-        if args == "relu":
-            fn = torch.nn.ReLU( inplace=True )
-        elif args == "mean":
-            fn = self.mean4d
-        elif args == "max":
-            fn = self.max4d
-        elif args == "none" or args == "None":
-            fn = None
-        else:
-            fn = self.load_from_context( args, default=None )
-            if not fn:
-                print( "Could not find function {}".format( args ) )
-                return
-        if self.output_hooked == None:
-            print( "No hooks available" )
         
-        self.output_hooked.modify( fn )
+        model_info = self.models[ args ] if args else self.cur_model
+        module_info = model_info.get_cur_module()
+        self.message( "Current layer is {}: {}".format( module_info.id, module_info.module ) )
+        module_info.register_forward_hook()
 
-    do_mod_fhook = do_modify_fhook
+        net = model_info.model
+        _ = net( image )
 
+        self.display_module_data( module_info )
+
+    def do_up( self, args ):
+        if not self.cur_model:
+            self.error( "Please load a model first" )
+            return
+        self.cur_model.up()
 
     ###########################
     # Utility functions go here
     ###########################
-    def find_first_conv( self, net ):
+    def find_first_instance( self, net, module=nn.Conv2d ):
         for layer in net.children():
-            if isinstance( layer, nn.ModuleList ) or isinstance( layer, nn.Sequential ):
-                layer = self.find_first_conv( layer )
             if isinstance( layer, nn.Conv2d ):
                 return layer
+            ret = self.find_first_instance( layer, module=module )
+            if isinstance( ret, module ):
+                return ret
         return None
+
 
     def load_from_context( self, name, default=None ):
         if not name:
@@ -358,6 +491,7 @@ class Shell( cmd.Cmd ):
     def top_n( self, n, ar ):
         index = np.argpartition( ar, -n )[ -n: ]
         return [ ( i, ar[ i ] ) for i in index ]
+
 
     ## FIXBUG: the following function only works when when first dim is 1
     ## May need to be fixed later to deal with batch inputs
@@ -373,11 +507,34 @@ class Shell( cmd.Cmd ):
     def max4d( self, data ):
         return self.op_4d( data, op=torch.max )
 
+
+    def display_module_data( self, module_info ):
+        if module_info.dim() != 4 or module_info.size( 0 ) != 1:
+            print( "Unsupported data dimensions" )
+            return
+
+        data = module_info.data().squeeze( 0 )
+        index = np.arange( data.size( 0 ) )
+        # The following statement is invariant to data of dimension ( 1 ) such as 
+        # a list of tensors
+        y_data = list( map( lambda x: torch.mean( x ).float().item(), data[ : ] ) )
+        
+        top5 = self.top_n( 5, y_data )
+
+        ax = self.fig.current_axes()
+        ax.bar( index, y_data, align="center", width=1 )
+        for i, v in top5:
+            ax.text( i, v, "{}".format( i ) )
+        ax.set_title( "Histogram of hooked data" )
+        ax.grid()
+        self.fig.show_graph()
+
+
     ####################################################
     # Helper functions to debugger functionality go here
     ####################################################
     def error( self, err_msg ):
-        print( "***.{}".format( err_msg ), file=self.stdout )
+        print( "***{}".format( err_msg ), file=self.stdout )
 
     def message( self, msg ):
         print( msg, file=self.stdout )
@@ -420,6 +577,9 @@ class Shell( cmd.Cmd ):
                 break
             except KeyboardInterrupt:
                 self.message( "**Keyboard Interrupt" )
+            except AttributeError:
+                self.error( "----------Error----------" )
+                traceback.print_exc()
             except RuntimeError as e:
                 self.error( e )
 
