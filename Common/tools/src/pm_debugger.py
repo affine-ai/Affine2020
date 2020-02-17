@@ -555,10 +555,9 @@ class Shell( cmd.Cmd ):
     # Helper functions to debugger functionality go here
     ####################################################
     def error( self, err_msg ):
-        print( "***{}".format( err_msg ), file=self.stdout )
+        self.stdout.write( "***{}\n".format( err_msg ) )
 
     def message( self, msg="", end="\n" ):
-        #print( msg, file=self.stdout )
         self.stdout.write( msg + end )
 
     def exec_rc( self ):
