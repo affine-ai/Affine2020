@@ -5,6 +5,9 @@ import os, sys, code, traceback
 import cmd, readline
 import atexit
 from collections import OrderedDict
+import curses
+from curses import wrapper
+
 import matplotlib
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 unused import
@@ -16,7 +19,6 @@ import torchvision
 from torchvision import transforms, datasets
 from torchvision.models import *
 from PIL import Image
-
 
 # Disable the top menubar on plots
 matplotlib.rcParams[ "toolbar" ] = "None"
@@ -58,52 +60,56 @@ class GraphWindow( object ):
 class ModelMeta( object ):
     def __init__( self, model ):
         self.model = model
-        self.cur_module = None
-        self.modules = OrderedDict()
+        self.cur_layer = None
+        self.layers = OrderedDict()
 
-    def init_module( self ):
-        id, module = self.find_last_instance( self.model, module=nn.ReLU )
-        module_info = ModuleMeta( module, id )
-        self.modules[ tuple( id ) ] = module_info
-        self.cur_module = module_info
-        return module_info
+    def init_layer( self ):
+        id, layer = self.find_last_instance( self.model, layer=nn.ReLU )
+        layer_info = LayerMeta( layer, id )
+        self.layers[ tuple( id ) ] = layer_info
+        self.cur_layer = layer_info
+        return layer_info
 
-    def get_cur_module( self ):
-        if not self.cur_module:
-            self.init_module()
-        return self.cur_module
+    def get_cur_id_layer( self ):
+        if not self.cur_layer:
+            self.init_layer()
+        return self.cur_layer.id, self.cur_layer.layer
+
+    def get_layer_info( self ):
+        if not self.cur_layer:
+            self.init_layer()
+        return self.cur_layer
 
     def up( self ):
-        self.traverse_updown( up=True )
+        return self.traverse_updown( dir=-1 )
 
     def down( self ):
-        self.traverse_updown( up=False )
+        return self.traverse_updown( dir=1 )
 
-    def traverse_updown( self, up=True ):
-        id = self.cur_module.id
-        new_id, new_module = self.find_updown_instance( self.model, id, up=up )
+    def traverse_updown( self, dir ):
+        id = self.cur_layer.id
+        new_id, new_layer = self.find_instance_by_id( self.model, id, dir=dir )
         
         if not new_id:
-            print( "already at limit" )
-            return
+            return False
 
-        id, module = new_id, new_module
+        id, layer = new_id, new_layer
 
-        if tuple( id ) in self.modules:
-            self.cur_module = self.modules[ tuple( id ) ]
+        if tuple( id ) in self.layers:
+            self.cur_layer = self.layers[ tuple( id ) ]
         else:
-            self.cur_module = ModuleMeta( module, id )
-            self.modules[ tuple( id ) ] = self.cur_module
-        print( "Current module is {}: {}".format( id, self.cur_module.module ) )
+            self.cur_layer = LayerMeta( layer, id )
+            self.layers[ tuple( id ) ] = self.cur_layer
+        return True
 
-    def find_updown_instance( self, net, key, up=True ):
+    def find_instance_by_id( self, net, key, dir ):
         cur_frame = []
         frame = []
         leaf = None
         terminate = False
         terminate_next = False
 
-        def _recurse_module( module ):
+        def _recurse_layer( layer ):
             nonlocal key
             nonlocal cur_frame
             nonlocal frame
@@ -111,70 +117,73 @@ class ModelMeta( object ):
             nonlocal terminate
             nonlocal terminate_next
 
-            for i, m in enumerate( module.children() ):
+            for i, m in enumerate( layer.children() ):
                 if terminate:
                     break
 
                 cur_frame.append( i )
 
                 if cur_frame == key:
-                    if up:
+                    if dir == -1:
                         terminate = True
-                    else:
+                    elif dir == 1:
                         terminate_next = True
                         frame = []
+                    elif dir == 0:
+                        terminate == True
+                        frame, leaf = cur_frame.copy(), m
                 else:
+                    # We don't have a key match, treat it like a normal iteration
                     # If this is a leaf node, save it's location else recurse further
                     if not list( m.children() ):
                         frame, leaf = cur_frame.copy(), m
                         terminate = terminate_next
                     else:
-                        _recurse_module( m )
+                        _recurse_layer( m )
 
                 cur_frame.pop()       
             return
 
-        _recurse_module( net )
+        _recurse_layer( net )
         return frame, leaf
 
 
-    def find_last_instance( self, net, module=nn.Conv2d, cur_frame=[], found_frame=[] ):
+    def find_last_instance( self, net, layer=nn.Conv2d, cur_frame=[], found_frame=[] ):
         """This method does a depth first search and finds the last instance of the
-        specifiied module in the tree"""
+        specifiied layer in the tree"""
         found = None
         ret_found = None
 
         for i, l in enumerate( net.children() ):
             cur_frame.append( i )
 
-            if isinstance( l, module ):
+            if isinstance( l, layer ):
                 found = l
                 if cur_frame > found_frame:
                     found_frame = cur_frame.copy()
 
-            found_frame, ret_found = self.find_last_instance( l, module=module,
+            found_frame, ret_found = self.find_last_instance( l, layer=layer,
                                                             cur_frame=cur_frame, 
                                                             found_frame=found_frame )
-            if isinstance( ret_found, module ):
+            if isinstance( ret_found, layer ):
                 found = ret_found
             cur_frame.pop()
         return found_frame, found
 
 
-class ModuleMeta( object ):
-    def __init__( self, module, id=[] ):
+class LayerMeta( object ):
+    def __init__( self, layer, id=[] ):
         self.out = None
-        self.fn = None
-        self.module = module
+        self.post_process_fn = None
+        self.layer = layer
         self.id = id
 
     def register_forward_hook( self, hook_fn=None ):
         if hook_fn is None:
             hook_fn = self.fhook_fn
-        self.fhook = self.module.register_forward_hook( hook_fn )
-        print( "Registering forward hook" )
+        self.fhook = self.layer.register_forward_hook( hook_fn )
 
-    def fhook_fn( self, module, input, output ):
+    def fhook_fn( self, layer, input, output ):
         self.out = output.clone().detach()
 
     def available( self ):
@@ -183,9 +192,9 @@ class ModuleMeta( object ):
         return False
 
     def data( self, raw=False ):
-        if self.fn and raw is False:
+        if self.post_process_fn and raw is False:
             try:
-                return self.fn( self.out )
+                return self.post_process_fn( self.out )
             except:
                 return None
         else:
@@ -200,15 +209,19 @@ class ModuleMeta( object ):
     def dim( self ):
         return self.out.dim()
 
-    def modify( self, fn ):
+    def post_process_hook( self, fn ):
         if callable( fn ):
-            self.fn = fn
+            self.post_process_fn = fn
         else:
-            print( "Modifier is not a function" )
+            return False
+
+    def has_post_process( self ):
+        if self.post_process_fn:
+            return True
+        return False
 
     def close( self ):
         self.fhook.remove()
-        print( "Removing hooks" )
 
 
 class Shell( cmd.Cmd ):
@@ -220,8 +233,6 @@ class Shell( cmd.Cmd ):
         self.device = "cpu"
         self.models = {}
         self.cur_model = None
-        self.cur_layer = None
-        self.output_hooked = None
         self.cur_frame = sys._getframe().f_back
 
         self.fig = GraphWindow()
@@ -278,7 +289,7 @@ class Shell( cmd.Cmd ):
     ####################################
     def do_quit( self, args ):
         """Exits the shell"""
-        print( "Exiting shell" )
+        self.message( "Exiting shell" )
         plt.close()
         raise SystemExit
 
@@ -286,22 +297,22 @@ class Shell( cmd.Cmd ):
         """Prints pytorch model summary"""
         try:
             for layer in model.layers:
-                print( "{}  {}".format( layer._get_name(), layer.size() ) )
+                self.message( "{}  {}".format( layer._get_name(), layer.size() ) )
         except:
             self.error( sys.exc_info()[ 1 ] )
 
     def do_set_model( self, args ):
-        name = args if args else "model"
-        model = self.load_from_context( name )
+        model_name = args if args else "model"
+        model = self.load_from_context( model_name, default="model" )
         if model is None:
             self.error( "Could not find specified model" )
 
-        if name in self.models:
-            self.cur_model = self.models[ name ]
+        if model_name in self.models:
+            self.cur_model = self.models[ model_name ]
         else:
             self.cur_model = ModelMeta( model )
-            self.models[ name ] = self.cur_model
-        self.message( "Setting model to: {}".format( name ) )
+            self.models[ model_name ] = self.cur_model
+        self.message( "Setting model to: {}".format( model_name ) )
     
     def do_load_image( self, args ):
         """load a single image"""
@@ -309,7 +320,7 @@ class Shell( cmd.Cmd ):
         
         image_path = os.path.join( self.config.image_path, args )
         if not os.path.isfile( image_path ):
-            print( "Image not found")
+            self.error( "Image not found")
             return
         self.message( "Loading image {}".format( image_path ) )
         image = Image.open( image_path )
@@ -348,7 +359,7 @@ class Shell( cmd.Cmd ):
 
 
     def do_show_image( self, args ):
-        img = self.load_from_context( args, default=image )
+        img = self.load_from_context( args, default="image" )
         if img is None:
             self.error( "Could not find image" )
             return
@@ -372,35 +383,7 @@ class Shell( cmd.Cmd ):
     do_show_img = do_show_image
 
 
-    def do_grab_output( self, args ):
-        layer = self.load_from_context( args, self.cur_layer )
-        if layer == None:
-            self.error( "No feasible layer found")
-            return
-        self.output_hooked = ModuleMeta( layer )
-        self.output_hooked.register_forward_hook()
-        
-    do_grab_out = do_grab_output
-
-
-    def do_release_output( self, args ):
-        self.output_hooked.close()
-        self.output_hooked = None
-
-    do_rel_out = do_release_output
-    do_rel_fhook = do_release_output
-
-
-    def do_show_fhook( self, args ):
-        if self.output_hooked == None or self.output_hooked.available() == False:
-            self.error( "No hooked outputs available")
-            return
-        self.display_module_data( self.output_hooked )
-
-    do_show_grab = do_show_fhook
-
-
-    def do_modify_fhook( self, args ):
+    def do_add_post_process( self, args ):
         if args == "relu":
             fn = torch.nn.ReLU( inplace=True )
         elif args == "mean":
@@ -410,25 +393,25 @@ class Shell( cmd.Cmd ):
         elif args == "none" or args == "None":
             fn = None
         else:
-            fn = self.load_from_context( args, default=None )
+            fn = self.load_from_context( args )
             if not fn:
                 self.error( "Could not find function {}".format( args ) )
                 return
-        if self.output_hooked == None:
-            self.message( "No hooks available" )
-        
-        self.output_hooked.modify( fn )
+        if not self.cur_model:
+            self.error( "Please set a model first" )
+    
+        self.cur_model.get_layer_info().post_process_hook( fn )
 
-    do_mod_fhook = do_modify_fhook
+    do_add_postp = do_add_post_process
 
 
     def do_show_weights_firstconv( self, args ):
-        net = self.load_from_context( args, default=model )
+        net = self.load_from_context( args, default=self.cur_model.model )
         if net is None:
             self.error( "Could not find specified model {}".format( args ) )
             return
 
-        conv = self.find_first_instance( net, module=nn.Conv2d )
+        conv = self.find_first_instance( net, layer=nn.Conv2d )
         if not conv:
             self.error( "No Conv2d layer found" )
             return
@@ -465,48 +448,66 @@ class Shell( cmd.Cmd ):
             return
         
         model_info = self.models[ args ] if args else self.cur_model
-        module_info = model_info.get_cur_module()
-        self.message( "Current layer is {}: {}".format( module_info.id, module_info.module ) )
-        module_info.register_forward_hook()
+        layer_info = model_info.get_layer_info()
+
+        id, layer = model_info.get_cur_id_layer()
+        self.message( "Current layer is {}: {}".format( id, layer ) )
+        layer_info.register_forward_hook()
+        self.message( "Registered forward hook" )
 
         net = model_info.model
         _ = net( image )
 
-        self.display_module_data( module_info )
+        self.display_layer_data( layer_info )
+
 
     def do_up( self, args ):
         if not self.cur_model:
             self.error( "Please load a model first" )
             return
-        self.cur_model.up()
+        
+        if not self.cur_model.up():
+            self.message( "Already at top" )
+        id, layer = self.cur_model.get_cur_id_layer()
+        self.message( "Current layer is {}: {}".format( id, layer ) )
+
 
     def do_down( self, args ):
         if not self.cur_model:
             self.error( "Please load a model first" )
             return
-        self.cur_model.down()
+        if not self.cur_model.down():
+            self.message( "Already at bottom" )
+        id, layer = self.cur_model.get_cur_id_layer()
+        self.message( "Current layer is {}: {}".format( id, layer ) )
 
     ###########################
     # Utility functions go here
     ###########################
-    def find_first_instance( self, net, module=nn.Conv2d ):
-        for layer in net.children():
-            if isinstance( layer, nn.Conv2d ):
-                return layer
-            ret = self.find_first_instance( layer, module=module )
-            if isinstance( ret, module ):
+    def find_first_instance( self, net, layer=nn.Conv2d ):
+        for l in net.children():
+            if isinstance( l, nn.Conv2d ):
+                return l
+            ret = self.find_first_instance( l, layer=layer )
+            if isinstance( ret, layer ):
                 return ret
         return None
 
 
     def load_from_context( self, name, default=None ):
-        if not name:
-            return default
+        if not name and not default:
+            return None
 
+        out = None
         if name in self.cur_frame.f_globals:
-            return self.cur_frame.f_globals[ name ]
+            out = self.cur_frame.f_globals[ name ]
         else:
-            return default
+            if isinstance( default, str ):
+                out = self.cur_frame.f_globals[ default ] if default in self.cur_frame.f_globals else None
+            else:
+                out = default
+        return out
+
 
     def top_n( self, n, ar ):
         index = np.argpartition( ar, -n )[ -n: ]
@@ -528,12 +529,12 @@ class Shell( cmd.Cmd ):
         return self.op_4d( data, op=torch.max )
 
 
-    def display_module_data( self, module_info ):
-        if module_info.dim() != 4 or module_info.size( 0 ) != 1:
-            print( "Unsupported data dimensions" )
+    def display_layer_data( self, layer_info ):
+        if layer_info.dim() != 4 or layer_info.size( 0 ) != 1:
+            self.error( "Unsupported data dimensions" )
             return
 
-        data = module_info.data().squeeze( 0 )
+        data = layer_info.data().squeeze( 0 )
         index = np.arange( data.size( 0 ) )
         # The following statement is invariant to data of dimension ( 1 ) such as 
         # a list of tensors
@@ -545,7 +546,7 @@ class Shell( cmd.Cmd ):
         ax.bar( index, y_data, align="center", width=1 )
         for i, v in top5:
             ax.text( i, v, "{}".format( i ) )
-        ax.set_title( "Histogram of hooked data" )
+        ax.set_title( "Histogram of layer {}".format( layer_info.id ) )
         ax.grid()
         self.fig.show_graph()
 
@@ -556,25 +557,26 @@ class Shell( cmd.Cmd ):
     def error( self, err_msg ):
         print( "***{}".format( err_msg ), file=self.stdout )
 
-    def message( self, msg ):
-        print( msg, file=self.stdout )
+    def message( self, msg="", end="\n" ):
+        #print( msg, file=self.stdout )
+        self.stdout.write( msg + end )
 
     def exec_rc( self ):
         if not self.rc_lines:
             return
 
-        print( "\nExecuting rc file" )
+        self.message( "\nExecuting rc file" )
         num = 1
         while self.rc_lines:
             line = self.rc_lines.pop( 0 ).strip()
-            print( "{}: {}".format( num, line ), end='' )
+            self.message( "{}: {}".format( num, line ), end="" )
             num += 1
             if not line or "#" in line[ 0 ]:
-                print()
+                self.message()
                 continue
             self.onecmd( line )
-            print( " ...Done" )
-        print()
+            self.message( " ...Done" )
+        self.message()
 
     def init_history( self, histfile ):
         try:
@@ -585,7 +587,7 @@ class Shell( cmd.Cmd ):
         readline.set_auto_history( True )
 
     def save_history( self, histfile ):
-        print( "Saving history" )
+        self.message( "Saving history" )
         readline.write_history_file( histfile )
 
     def _cmdloop( self, intro_header ):
