@@ -233,6 +233,7 @@ class Shell( cmd.Cmd ):
         self.device = "cpu"
         self.models = {}
         self.cur_model = None
+        self.data_post_process_fn = None
         self.cur_frame = sys._getframe().f_back
 
         self.fig = GraphWindow()
@@ -388,9 +389,9 @@ class Shell( cmd.Cmd ):
     do_show_img = do_show_image
 
 
-    def do_add_post_process( self, args ):
+    def do_set_post_process( self, args ):
         if args == "relu":
-            fn = torch.nn.ReLU( inplace=True )
+            fn = torch.nn.ReLU()
         elif args == "mean":
             fn = self.mean4d
         elif args == "max":
@@ -402,19 +403,39 @@ class Shell( cmd.Cmd ):
             if not fn:
                 self.error( "Could not find function {}".format( args ) )
                 return
-        if not self.cur_model:
-            self.error( "Please set a model first" )
-    
-        self.cur_model.get_layer_info().post_process_hook( fn )
 
-    do_add_postp = do_add_post_process
+        if not fn:
+            self.message( "Removing post processing function" )
+            self.data_post_process_fn = None
+            return
+
+        if fn and not callable( fn ):
+            self.error( "Not a valid function" )
+            return
+
+        self.data_post_process_fn = fn
+        if not hasattr( self.data_post_process_fn, "__name__" ):
+            self.data_post_process_fn.__name__ = args
+        self.message( "Post process function is {}".format( self.data_post_process_fn.__name__ ) )
+
+    do_set_postp = do_set_post_process
 
 
     def do_show_weights_firstconv( self, args ):
-        net = self.load_from_context( args, default=self.cur_model.model )
-        if net is None:
-            self.error( "Could not find specified model {}".format( args ) )
+        if args and args not in self.models:
+            net = self.load_from_context( args )
+            if not net:
+                self.error( "Could not find model {}".format( args ) )
+                return
+            else:
+                self.models[ args ] = ModelMeta( net )
+        
+        if not args and not self.cur_model:
+            self.error( "No default model is set. Please set a model first" )
             return
+
+        model_info = self.models[ args ] if args else self.cur_model
+        net = model_info.model
 
         conv = self.find_first_instance( net, layer=nn.Conv2d )
         if not conv:
@@ -462,11 +483,13 @@ class Shell( cmd.Cmd ):
         self.message( "Current layer is {}: {}".format( id, layer ) )
         layer_info.register_forward_hook()
         self.message( "Registered forward hook" )
+        if self.data_post_process_fn:
+            self.message( "Post processing function is {}".format( self.data_post_process_fn.__name__ ) )
 
         net = model_info.model
         _ = net( image )
 
-        self.display_layer_data( layer_info )
+        self.display_layer_data( layer_info, pp_fn=self.data_post_process_fn )
 
 
     def do_up( self, args ):
@@ -538,12 +561,15 @@ class Shell( cmd.Cmd ):
         return self.op_4d( data, op=torch.max )
 
 
-    def display_layer_data( self, layer_info ):
+    def display_layer_data( self, layer_info, pp_fn ):
         if layer_info.dim() != 4 or layer_info.size( 0 ) != 1:
             self.error( "Unsupported data dimensions" )
             return
 
-        data = layer_info.data().squeeze( 0 )
+        data = layer_info.data()
+        data = pp_fn( data ) if pp_fn else data
+        data = data.squeeze( 0 )
+        
         index = np.arange( data.size( 0 ) )
         # The following statement is invariant to data of dimension ( 1 ) such as 
         # a list of tensors
