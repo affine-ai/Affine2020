@@ -5,6 +5,7 @@ from train_utils import parse_args, AverageMeter, ProgressMeter, Config, setup_a
 import os, time, datetime
 import warnings
 
+import math
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -24,7 +25,10 @@ except:
 
 def main_worker( gpu, args, config ):
     best_acc1 = 0
-    args.writer = SummaryWriter( filename_suffix="{}".format( gpu ) )
+    if gpu % args.gpus_per_node == 0:
+        args.writer = SummaryWriter( filename_suffix="{}".format( gpu ) )
+    else:
+        args.writer = None
 
     if args.gpu is None:
         dist.init_process_group( backend=args.dist_backend, 
@@ -44,7 +48,7 @@ def main_worker( gpu, args, config ):
 
     criterion = nn.CrossEntropyLoss().cuda( gpu )
     optimizer = optim.SGD( model.parameters(), 
-                           lr=args.learning_rate, 
+                           lr=args.base_lr, 
                            momentum=args.momentum, 
                            weight_decay=args.weight_decay )
 
@@ -96,7 +100,8 @@ def main_worker( gpu, args, config ):
 
         time0 = time.time()
     
-    args.writer.close()
+    if args.writer:
+        args.writer.close()
 
 def train( loader, model, criterion, optimizer, epoch, gpu, args ):
     model.train()
@@ -132,20 +137,22 @@ def train_or_eval( train, gpu, loader, model, criterion, optimizer, args, epoch 
             top1.update( acc1[ 0 ], batch_size )
             top5.update( acc5[ 0 ], batch_size )
 
-            if i % 100 == 0:
+            if i % 200 == 0:
                 progress.display( i )
             
             # All the code that needs to run only when training goes here
             if train:
+                lr = adjust_learning_rate( optimizer, epoch, i, n_inputs, args )
                 optimizer.zero_grad()
                 with amp.scale_loss( loss, optimizer ) as scaled_loss:
                     scaled_loss.backward()
                 optimizer.step()
 
-                if i % 100 == 0:
+                if ( i % 100 == 0 ) and ( gpu % args.gpus_per_node == 0 ):
                     n_iter = n_inputs * epoch + i
                     args.writer.add_scalar( "Loss/train/gpu{}".format( gpu ), loss.item(), n_iter )
                     args.writer.add_scalar( "Accuracy/train/gpu{}".format( gpu ), acc1, n_iter )
+                    args.writer.add_scalar( "Loss/Accuracy", acc1, lr * 10000 )
             # End of training specific code
     return top1.avg
 
@@ -163,12 +170,18 @@ def accuracy( outputs, targets, topk=(1, ) ):
             res.append( correct_k.mul_( 100.0 / batch_size ) )
         return res
 
-def adjust_learning_rate( optimizer, epoch, args ):
-    """learning rate drops by 1/10th every 30 epochs
+def adjust_learning_rate( optimizer, epoch, iter, total_iter, args ):
+    """learning rate schedule
     """
-    lr = args.learning_rate * ( 0.1 ** ( epoch // 30 ) )
+    i = epoch * total_iter + iter
+
+    cycle = math.floor( 1 + i / ( 2 * args.stepsize ) )
+    x = abs( i / args.stepsize - 2 * cycle + 1 )
+    lr = args.base_lr + ( args.max_lr - args.base_lr ) * max( 0.0, ( 1.0 - x ) )
+
     for param_group in optimizer.param_groups:
         param_group[ 'lr' ] = lr
+    return lr
 
 def save_checkpoint( state, is_best=True, filename=None ):
     torch.save( state, filename )
