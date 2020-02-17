@@ -74,55 +74,69 @@ class ModelMeta( object ):
         return self.cur_module
 
     def up( self ):
-        def _dec( n ):
-            i = n.pop()
-            if i > 0:
-                i -= 1
-                n.append( i )
-                return n
-            else:
-                if n: 
-                    n = _dec( n )
-                    m = list( self.model.children() )
-                    for i in n:
-                        m = m[ i ]
-                    n.append( len( list( m.children() ) ) - 1 )
-                else:
-                    n.append( 0 )
-                return n
+        self.traverse_updown( up=True )
 
+    def down( self ):
+        self.traverse_updown( up=False )
+
+    def traverse_updown( self, up=True ):
         id = self.cur_module.id
-        try:
-            id = _dec( id )
-        except:
-            print( "already at topmost" )
+        new_id, new_module = self.find_updown_instance( self.model, id, up=up )
+        
+        if not new_id:
+            print( "already at limit" )
             return
+
+        id, module = new_id, new_module
 
         if tuple( id ) in self.modules:
             self.cur_module = self.modules[ tuple( id ) ]
         else:
-            id, module = self.find_instance( self.model, key=id )
             self.cur_module = ModuleMeta( module, id )
-            self.modules[ tuple( id ) ] = module
-        print( "Current moduel is {}: {}".format( id, module ) )
+            self.modules[ tuple( id ) ] = self.cur_module
+        print( "Current module is {}: {}".format( id, self.cur_module.module ) )
 
-    def find_instance( self, net, key, cur_frame=[], found_frame=[] ):
-        found = None
+    def find_updown_instance( self, net, key, up=True ):
+        cur_frame = []
+        frame = []
+        leaf = None
+        terminate = False
+        terminate_next = False
 
-        for i, l in enumerate( net.children() ):
-            cur_frame.append( i )
+        def _recurse_module( module ):
+            nonlocal key
+            nonlocal cur_frame
+            nonlocal frame
+            nonlocal leaf
+            nonlocal terminate
+            nonlocal terminate_next
 
-            if cur_frame == key:
-                found = l
-                found_frame = cur_frame.copy()
-                cur_frame.pop()
-                return found_frame, found
+            for i, m in enumerate( module.children() ):
+                if terminate:
+                    break
 
-            found_frame, found = self.find_instance( l, key=key, 
-                                                        cur_frame=cur_frame, 
-                                                        found_frame=found_frame )
-            cur_frame.pop()
-        return found_frame, found
+                cur_frame.append( i )
+
+                if cur_frame == key:
+                    if up:
+                        terminate = True
+                    else:
+                        terminate_next = True
+                        frame = []
+                else:
+                    # If this is a leaf node, save it's location else recurse further
+                    if not list( m.children() ):
+                        frame, leaf = cur_frame.copy(), m
+                        terminate = terminate_next
+                    else:
+                        _recurse_module( m )
+
+                cur_frame.pop()       
+            return
+
+        _recurse_module( net )
+        return frame, leaf
+
 
     def find_last_instance( self, net, module=nn.Conv2d, cur_frame=[], found_frame=[] ):
         """This method does a depth first search and finds the last instance of the
@@ -465,6 +479,12 @@ class Shell( cmd.Cmd ):
             self.error( "Please load a model first" )
             return
         self.cur_model.up()
+
+    def do_down( self, args ):
+        if not self.cur_model:
+            self.error( "Please load a model first" )
+            return
+        self.cur_model.down()
 
     ###########################
     # Utility functions go here
