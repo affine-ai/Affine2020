@@ -30,6 +30,12 @@ def parse_args():
                          help="momentum")
     parser.add_argument( "--weight-decay", default=0, type=float,
                          help="weight decay" )
+    parser.add_argument( "--base-lr", default=0.0001, type=float,
+                         help="min learning rate" )
+    parser.add_argument( "--max-lr", default=0.1, type=float,
+                         help="max learning rate" )
+    parser.add_argument( "--stepsize", default=1000, type=int,
+                         help="half the number of iterations to cycle the learning rate" )
 
     # training parameters
     parser.add_argument( "--start-epoch", default=0, type=int,
