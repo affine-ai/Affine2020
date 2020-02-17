@@ -247,6 +247,7 @@ class Shell( cmd.Cmd ):
         self.init_history( histfile=".pmdebug_history" )
         atexit.register( self.save_history, histfile=".pmdebug_history" )
 
+
     ##############################################
     # Functions overridden from base class go here
     ##############################################
@@ -293,6 +294,7 @@ class Shell( cmd.Cmd ):
         plt.close()
         raise SystemExit
 
+
     def do_summary( self, args ):
         """Prints pytorch model summary"""
         try:
@@ -301,9 +303,10 @@ class Shell( cmd.Cmd ):
         except:
             self.error( sys.exc_info()[ 1 ] )
 
+
     def do_set_model( self, args ):
         model_name = args if args else "model"
-        model = self.load_from_context( model_name, default="model" )
+        model = self.load_from_context( model_name )
         if model is None:
             self.error( "Could not find specified model" )
 
@@ -312,8 +315,9 @@ class Shell( cmd.Cmd ):
         else:
             self.cur_model = ModelMeta( model )
             self.models[ model_name ] = self.cur_model
-        self.message( "Setting model to: {}".format( model_name ) )
+        self.message( "Context now is-> {}".format( model_name ) )
     
+
     def do_load_image( self, args ):
         """load a single image"""
         global image
@@ -328,6 +332,7 @@ class Shell( cmd.Cmd ):
                                             transforms.ToTensor() ] )
         image = transform( image ).float()
         image = image.view( 1, *image.shape )
+
 
     def do_load_checkpoint( self, args ):
         """Load a checkpoint file into the model.
@@ -439,14 +444,17 @@ class Shell( cmd.Cmd ):
     def do_show_layer( self, args ):
         img = self.load_from_context( "image" )
         if img is None:
-            self.error( "Please laod an input image first" )
+            self.error( "Please load an input image first" )
             return
         
-        if args not in self.models and "model" not in self.models:
-            self.error( "Could not find {}".format( args ) )
-            self.message( "Please set a model first" )
+        if args and args not in self.models:
+            self.error( "Could not find model {}".format( args ) )
             return
         
+        if not args and not self.cur_model:
+            self.error( "No default model is set. Please set a model first" )
+            return
+
         model_info = self.models[ args ] if args else self.cur_model
         layer_info = model_info.get_layer_info()
 
@@ -480,6 +488,7 @@ class Shell( cmd.Cmd ):
             self.message( "Already at bottom" )
         id, layer = self.cur_model.get_cur_id_layer()
         self.message( "Current layer is {}: {}".format( id, layer ) )
+
 
     ###########################
     # Utility functions go here
@@ -560,6 +569,7 @@ class Shell( cmd.Cmd ):
     def message( self, msg="", end="\n" ):
         self.stdout.write( msg + end )
 
+
     def exec_rc( self ):
         if not self.rc_lines:
             return
@@ -577,6 +587,7 @@ class Shell( cmd.Cmd ):
             self.message( " ...Done" )
         self.message()
 
+
     def init_history( self, histfile ):
         try:
             readline.read_history_file( histfile )
@@ -585,9 +596,11 @@ class Shell( cmd.Cmd ):
         readline.set_history_length( 2000 )
         readline.set_auto_history( True )
 
+
     def save_history( self, histfile ):
         self.message( "Saving history" )
         readline.write_history_file( histfile )
+
 
     def _cmdloop( self, intro_header ):
         while True:
