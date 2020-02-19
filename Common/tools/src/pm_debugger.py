@@ -309,7 +309,8 @@ class Shell( cmd.Cmd ):
         model_name = args if args else "model"
         model = self.load_from_context( model_name )
         if model is None:
-            self.error( "Could not find specified model" )
+            self.error( "Could not find a model by name \"{}\"".format( model_name ) )
+            return
 
         if model_name in self.models:
             self.cur_model = self.models[ model_name ]
@@ -401,7 +402,7 @@ class Shell( cmd.Cmd ):
         else:
             fn = self.load_from_context( args )
             if not fn:
-                self.error( "Could not find function {}".format( args ) )
+                self.error( "Could not find function \"{}\"".format( args ) )
                 return
 
         if not fn:
@@ -421,17 +422,13 @@ class Shell( cmd.Cmd ):
     do_set_postp = do_set_post_process
 
 
-    def do_show_weights_firstconv( self, args ):
+    def do_show_first_layer_weights( self, args ):
         if args and args not in self.models:
-            net = self.load_from_context( args )
-            if not net:
-                self.error( "Could not find model {}".format( args ) )
-                return
-            else:
-                self.models[ args ] = ModelMeta( net )
+            self.error( "Could not find \"{}\" in context. Please set this model in context first.".format( args ) )
+            return
         
         if not args and not self.cur_model:
-            self.error( "No default model is set. Please set a model first" )
+            self.error( "No default model is set. Please set a model in context first." )
             return
 
         model_info = self.models[ args ] if args else self.cur_model
@@ -459,7 +456,7 @@ class Shell( cmd.Cmd ):
                                                                for j in range( s ) ), dim=0 )
         self.fig.imshow( grid_w )
 
-    do_show_wfconv = do_show_weights_firstconv
+    do_show_flw = do_show_first_layer_weights
 
 
     def do_show_layer( self, args ):
@@ -526,19 +523,33 @@ class Shell( cmd.Cmd ):
         return None
 
 
-    def load_from_context( self, name, default=None ):
-        if not name and not default:
+    def load_from_context( self, arg, default=None ):
+        """This method first processes arg:
+            1. If arg is in the global context, return it's value
+            2. If arg is not in the global context:
+                1. And no default is provided, return None
+                2. And a default is provided, process default
+        Process default:
+            1. Check if default is a string:
+                1. If it is, look for it in global context and return it's value
+                2. If not in global context, return None
+            2. If default is not a string, return default as it is
+        """
+        if not arg and not default:
             return None
 
-        out = None
-        if name in self.cur_frame.f_globals:
-            out = self.cur_frame.f_globals[ name ]
-        else:
-            if isinstance( default, str ):
-                out = self.cur_frame.f_globals[ default ] if default in self.cur_frame.f_globals else None
+        if arg in self.cur_frame.f_globals:
+            return self.cur_frame.f_globals[ arg ]
+        elif default is None:
+            return None
+        elif isinstance( default, str ):
+            if default in self.cur_frame.f_globals:
+                return self.cur_frame.f_globals[ default ]
             else:
-                out = default
-        return out
+                return None
+        else:
+            # We are here if args not in context, a default is provided but is not a string
+            return default
 
 
     def top_n( self, n, ar ):
@@ -637,7 +648,7 @@ class Shell( cmd.Cmd ):
                 break
             except KeyboardInterrupt:
                 self.message( "**Keyboard Interrupt" )
-            except AttributeError:
+            except ( AttributeError, TypeError ):
                 self.error( "----------Error----------" )
                 traceback.print_exc()
             except RuntimeError as e:
