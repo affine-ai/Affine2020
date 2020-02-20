@@ -264,11 +264,20 @@ class Shell( cmd.Cmd ):
                 line = "{} {}".format( c, " ".join( args ) )
         cmd.Cmd.onecmd( self, line )
 
+
     def default( self, line ):
         if line[ :1 ] == '!':
             line  = line[ 1: ]
+
+        is_assign = False
+        if line.find( '=' ) > 0:
+            var, _ = line.split( '=', maxsplit=1 )
+            var = var.strip()
+            is_assign = True
+
         locals = self.cur_frame.f_locals
         globals = self.cur_frame.f_globals
+        
         try:
             code = compile( line + "\n", "<stdin>", "single" )
             saved_stdin = sys.stdin
@@ -284,6 +293,10 @@ class Shell( cmd.Cmd ):
         except:
             exec_info = sys.exc_info()[ :2 ]
             self.error( traceback.format_exception_only( *exec_info )[ -1 ].strip() )
+        else:
+            if is_assign and var and var in self.models:
+                self.message( "Resyncing model \"{}\"".format( var ) )
+                self.resync_model( var )
 
 
     ####################################
@@ -310,6 +323,10 @@ class Shell( cmd.Cmd ):
         model = self.load_from_context( model_name )
         if model is None:
             self.error( "Could not find a model by name \"{}\"".format( model_name ) )
+            return
+
+        if not isinstance( model, nn.Module ):
+            self.error( "{} is not a valid model" )
             return
 
         if model_name in self.models:
@@ -550,10 +567,11 @@ class Shell( cmd.Cmd ):
         del self.models[ name ]
         
         new_model = self.load_from_context( name )
-        new_model_info = ModelMeta( new_model )
-        self.models[ name ] = new_model_info
-        if set_cur_model:
-            self.cur_model = new_model_info
+        if new_model is not None and isinstance( new_model, nn.Module ):
+            new_model_info = ModelMeta( new_model )
+            self.models[ name ] = new_model_info
+            if set_cur_model:
+                self.cur_model = new_model_info
 
 
     def load_from_context( self, arg, default=None ):
