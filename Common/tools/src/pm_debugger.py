@@ -75,7 +75,7 @@ class ModelMeta( object ):
             self.init_layer()
         return self.cur_layer.id, self.cur_layer.layer
 
-    def get_layer_info( self ):
+    def get_cur_layer_info( self ):
         if not self.cur_layer:
             self.init_layer()
         return self.cur_layer
@@ -87,7 +87,7 @@ class ModelMeta( object ):
         return self.traverse_updown( dir=1 )
 
     def traverse_updown( self, dir ):
-        id = self.cur_layer.id
+        id = self.get_cur_layer_info().id
         new_id, new_layer = self.find_instance_by_id( self.model, id, dir=dir )
         
         if not new_id:
@@ -320,6 +320,18 @@ class Shell( cmd.Cmd ):
         self.message( "Context now is-> {}".format( model_name ) )
     
 
+    def do_resync( self, args ):
+        if not args:
+            self.error( "Please provide a model name" )
+            return
+
+        if args not in self.models:
+            self.error( "Model \"{}\" not in context".format( args ) )
+            return
+
+        self.resync_model( args )
+
+
     def do_load_image( self, args ):
         """load a single image"""
         global image
@@ -442,6 +454,9 @@ class Shell( cmd.Cmd ):
         w = conv.weight.detach()
         w = w.permute( 0, 2, 3, 1 )
 
+        # Normalize w
+        #w = ( w - w.mean() ) / w.std()
+
         nfilters = w.size()[ 0 ]
         s = int( np.floor( np.sqrt( nfilters ) ) )
         
@@ -474,7 +489,7 @@ class Shell( cmd.Cmd ):
             return
 
         model_info = self.models[ args ] if args else self.cur_model
-        layer_info = model_info.get_layer_info()
+        layer_info = model_info.get_cur_layer_info()
 
         id, layer = model_info.get_cur_id_layer()
         self.message( "Current layer is {}: {}".format( id, layer ) )
@@ -521,6 +536,24 @@ class Shell( cmd.Cmd ):
             if isinstance( ret, layer ):
                 return ret
         return None
+
+
+    def resync_model( self, name ):
+        set_cur_model = False
+
+        cur_model_in_context = self.models[ name ]
+
+        if self.cur_model is cur_model_in_context:
+            self.cur_model = None
+            set_cur_model = True
+
+        del self.models[ name ]
+        
+        new_model = self.load_from_context( name )
+        new_model_info = ModelMeta( new_model )
+        self.models[ name ] = new_model_info
+        if set_cur_model:
+            self.cur_model = new_model_info
 
 
     def load_from_context( self, arg, default=None ):
