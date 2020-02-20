@@ -581,7 +581,7 @@ class Shell( cmd.Cmd ):
             else:
                 return None
         else:
-            # We are here if args not in context, a default is provided but is not a string
+            # We are here if args not in context and a non-string default is provided
             return default
 
 
@@ -606,17 +606,18 @@ class Shell( cmd.Cmd ):
 
 
     def display_layer_data( self, layer_info, pp_fn ):
-        if layer_info.dim() != 4 or layer_info.size( 0 ) != 1:
+        if layer_info.size( 0 ) != 1:
             self.error( "Unsupported data dimensions" )
             return
 
         data = layer_info.data()
         data = pp_fn( data ) if pp_fn else data
-        data = data.squeeze( 0 )
         
+        data = data.squeeze( 0 )
         index = np.arange( data.size( 0 ) )
-        # The following statement is invariant to data of dimension ( 1 ) such as 
-        # a list of tensors
+        # The following statement is invariant to data of dimension ( 1 ).
+        # such as a list of tensors. Along the first dimension, replace 
+        # the elements with any remaining dimensions with their mean.
         y_data = list( map( lambda x: torch.mean( x ).float().item(), data[ : ] ) )
         
         top5 = self.top_n( 5, y_data )
