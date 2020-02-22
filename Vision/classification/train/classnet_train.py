@@ -22,6 +22,8 @@ try:
 except:
     APEX_AVAILABLE = False
 
+torch.backends.cudnn.benchmark = True
+torch.backends.cudnn.enabled = True
 
 def main_worker( gpu, args, config ):
     best_acc1 = 0
@@ -47,9 +49,12 @@ def main_worker( gpu, args, config ):
     model.cuda( gpu )
 
     criterion = nn.CrossEntropyLoss().cuda( gpu )
-    optimizer = optim.SGD( model.parameters(), 
+    #optimizer = optim.SGD( model.parameters(), 
+    #                       lr=args.base_lr, 
+    #                       momentum=args.momentum, 
+    #                       weight_decay=args.weight_decay )
+    optimizer = optim.AdamW( model.parameters(), 
                            lr=args.base_lr, 
-                           momentum=args.momentum, 
                            weight_decay=args.weight_decay )
 
     # Nvidia documentation states - 
@@ -70,52 +75,44 @@ def main_worker( gpu, args, config ):
         amp.load_state_dict( checkpoint[ "amp" ] )
 
     if args.evaluate:
-        validate( val_loader, model, criterion, gpu, args )
+        train_or_eval( False, gpu, val_loader, model, criterion, None, args, 0 )
         return
 
     ################################
     # Main training loop starts here
     ################################
-    time0 = time.time()
-    for epoch in range( args.start_epoch, args.epochs ):
+    start_epoch = args.start_epoch - 1
+    end_epoch = start_epoch + args.epochs
+
+    for epoch in range( start_epoch, end_epoch ):
         if args.gpu is None:
             train_loader.sampler.set_epoch( epoch )
         
-        train( train_loader, model, criterion, optimizer, epoch, gpu, args )
+        train_or_eval( True, gpu, train_loader, model, criterion, optimizer, args, epoch )
 
-        print( "Training time: {}".format( datetime.timedelta( seconds=time.time() - time0 ) ) )
+        if args.gpu or gpu % args.gpus_per_node == 0:
+            acc1 = train_or_eval( False, gpu, val_loader, model, criterion, None, args, 0 )
 
-        acc1 = validate( val_loader, model, criterion, gpu, args )
-        is_best = acc1 > best_acc1
-        best_acc1 = max( acc1, best_acc1 )
+            is_best = acc1 > best_acc1
+            best_acc1 = max( acc1, best_acc1 )
 
-        if args.gpu or ( gpu % args.world_size == 0 ):
             print( "Saving checkpoint")
-            save_checkpoint( { "epoch": epoch + 1,
-                               "model": model.state_dict(),
-                               "optimizer": optimizer.state_dict(),
-                               "amp": amp.state_dict(),
-                               "best_acc1": best_acc1,
-                             }, is_best, filename=config.checkpoint_write )
-
-        time0 = time.time()
-    
+            save_checkpoint( { "epoch"      : epoch + 1,
+                               "model"      : model.state_dict(),
+                               "optimizer"  : optimizer.state_dict(),
+                               "amp"        : amp.state_dict(),
+                               "best_acc1"  : best_acc1,
+                            }, is_best, filename=config.checkpoint_write )
     if args.writer:
         args.writer.close()
 
-def train( loader, model, criterion, optimizer, epoch, gpu, args ):
-    model.train()
-    train_or_eval( True, gpu, loader, model, criterion, optimizer, args, epoch )
-
-def validate( loader, model, criterion, gpu, args ):
-    model.eval()
-    # All GPUs get the same copy of the model. Therefore, 
-    # running validation on one of them should be sufficient.
-    if gpu % args.gpus_per_node == 0:
-        return train_or_eval( False, gpu, loader, model, criterion, None, args, 0 )
-    return 0
 
 def train_or_eval( train, gpu, loader, model, criterion, optimizer, args, epoch ):
+    if train:
+        model.train()
+    else:
+        model.eval()
+
     losses = AverageMeter( "Loss", ":.4e" )
     top1 = AverageMeter( "Accuracy1", ":6.2f" )
     top5 = AverageMeter( "Accuracy5", ":6.2f" )
@@ -123,6 +120,8 @@ def train_or_eval( train, gpu, loader, model, criterion, optimizer, args, epoch 
 
     prefix = "Epoch:[{}]".format( epoch + 1 ) if train else "Test: "
     progress = ProgressMeter( n_inputs, [ losses, top1, top5 ], prefix=prefix )
+
+    time0 = time.time()
 
     with torch.set_grad_enabled( mode=train ):
         for i, ( images, target ) in enumerate( loader ):
@@ -142,19 +141,22 @@ def train_or_eval( train, gpu, loader, model, criterion, optimizer, args, epoch 
             
             # All the code that needs to run only when training goes here
             if train:
-                lr = adjust_learning_rate( optimizer, epoch, i, n_inputs, args )
+                n_iter = epoch * n_inputs + i
+                lr = adjust_learning_rate( optimizer, n_iter, args, policy="triangle" )
                 optimizer.zero_grad()
                 with amp.scale_loss( loss, optimizer ) as scaled_loss:
                     scaled_loss.backward()
                 optimizer.step()
 
                 if ( i % 100 == 0 ) and ( gpu % args.gpus_per_node == 0 ):
-                    n_iter = n_inputs * epoch + i
                     args.writer.add_scalar( "Loss/train/gpu{}".format( gpu ), loss.item(), n_iter )
                     args.writer.add_scalar( "Accuracy/train/gpu{}".format( gpu ), acc1, n_iter )
                     args.writer.add_scalar( "Loss/Accuracy", acc1, lr * 10000 )
             # End of training specific code
+    
+    print( "Epoch time: {}".format( datetime.timedelta( seconds=time.time() - time0 ) ) )
     return top1.avg
+
 
 def accuracy( outputs, targets, topk=(1, ) ):
     with torch.no_grad():
@@ -170,14 +172,17 @@ def accuracy( outputs, targets, topk=(1, ) ):
             res.append( correct_k.mul_( 100.0 / batch_size ) )
         return res
 
-def adjust_learning_rate( optimizer, epoch, iter, total_iter, args ):
+def adjust_learning_rate( optimizer, i, args, policy="triangle" ):
     """learning rate schedule
     """
-    i = epoch * total_iter + iter
-
     cycle = math.floor( 1 + i / ( 2 * args.stepsize ) )
+    if policy is "triangle2":
+        range = ( args.max_lr - args.base_lr ) / pow( 2, ( cycle - 1 ) )
+    else:
+        range = ( args.max_lr - args.base_lr )
+
     x = abs( i / args.stepsize - 2 * cycle + 1 )
-    lr = args.base_lr + ( args.max_lr - args.base_lr ) * max( 0.0, ( 1.0 - x ) )
+    lr = args.base_lr + range * max( 0.0, ( 1.0 - x ) )
 
     for param_group in optimizer.param_groups:
         param_group[ 'lr' ] = lr

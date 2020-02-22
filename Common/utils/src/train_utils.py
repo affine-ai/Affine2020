@@ -28,7 +28,7 @@ def parse_args():
                          help="learning rate" )
     parser.add_argument( "--momentum", default=0.9, type=float,
                          help="momentum")
-    parser.add_argument( "--weight-decay", default=0, type=float,
+    parser.add_argument( "--weight-decay", default=1e-6, type=float,
                          help="weight decay" )
     parser.add_argument( "--base-lr", default=0.0001, type=float,
                          help="min learning rate" )
@@ -38,7 +38,7 @@ def parse_args():
                          help="half the number of iterations to cycle the learning rate" )
 
     # training parameters
-    parser.add_argument( "--start-epoch", default=0, type=int,
+    parser.add_argument( "--start-epoch", default=1, type=int,
                          help="start epoch number if different from 0" )
     parser.add_argument( "--epochs", default=1, type=int,
                          help="total number of epochs to run" )
@@ -111,7 +111,7 @@ def setup_and_launch( worker_fn=None, config=None ):
     if args.gpu is not None:
         args.world_size = 1
         warnings.warn( "You have chosen to train on a specific GPU")
-        worker_fn( args.gpu, 1, args, config )
+        worker_fn( args.gpu, args, config )
     else:
         args.world_size = args.nnodes * args.gpus_per_node
         args.batch_size = int( args.batch_size / args.world_size )
