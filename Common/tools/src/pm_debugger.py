@@ -423,9 +423,9 @@ class Shell( cmd.Cmd ):
         if args == "relu":
             fn = torch.nn.ReLU()
         elif args == "mean":
-            fn = self.mean4d
+            fn = torch.mean
         elif args == "max":
-            fn = self.max4d
+            fn = torch.max
         elif args == "none" or args == "None":
             fn = None
         else:
@@ -491,34 +491,66 @@ class Shell( cmd.Cmd ):
     do_show_flw = do_show_first_layer_weights
 
 
-    def do_show_layer( self, args ):
+    def do_show_activations( self, args ):
+        model_info, layer_info = self.get_info_from_context( args )
+        if model_info is None:
+            return
+
         img = self.load_from_context( "image" )
         if img is None:
             self.error( "Please load an input image first" )
             return
-        
-        if args and args not in self.models:
-            self.error( "Could not find model {}".format( args ) )
-            return
-        
-        if not args and not self.cur_model:
-            self.error( "No default model is set. Please set a model first" )
-            return
 
-        model_info = self.models[ args ] if args else self.cur_model
-        layer_info = model_info.get_cur_layer_info()
-
-        id, layer = model_info.get_cur_id_layer()
-        self.message( "Current layer is {}: {}".format( id, layer ) )
         layer_info.register_forward_hook()
         self.message( "Registered forward hook" )
+
         if self.data_post_process_fn:
             self.message( "Post processing function is {}".format( self.data_post_process_fn.__name__ ) )
 
         net = model_info.model
         _ = net( image )
 
-        self.display_layer_data( layer_info, pp_fn=self.data_post_process_fn )
+        title = "{} activations".format( layer_info.id )
+        self.display_layer_data( layer_info.data(), title, reduce_fn=self.data_post_process_fn )
+
+    do_show_act = do_show_activations
+
+
+    def do_show_weights( self, args ):
+        model_info, layer_info = self.get_info_from_context( args )
+        if model_info is None:
+            return
+
+        if self.data_post_process_fn:
+            self.message( "Post processing function is {}".format( self.data_post_process_fn.__name__ ) )
+
+        try:
+            data = layer_info.layer.weight.unsqueeze( 0 )
+        except:
+            self.error( "Current layer has no weights")
+        else:
+            title = "{} weights".format( layer_info.id )
+            self.display_layer_data( data, title, reduce_fn=self.data_post_process_fn )
+
+    do_show_weight = do_show_weights
+    do_show_wei = do_show_weights
+
+
+    def do_show_grads( self, args ):
+        model_info, layer_info = self.get_info_from_context( args )
+        if model_info is None:
+            return
+    
+        if self.data_post_process_fn:
+            self.message( "Post processing function is {}".format( self.data_post_process_fn.__name__ ) )
+
+        try:
+            data = layer_info.layer.weight.grad.unsqueeze( 0 )
+        except:
+            self.error( "Current layer has no gradients" )
+        else:
+            title = "{} gradients".format( layer_info.id )
+            self.display_layer_data( data, title, reduce_fn=self.data_post_process_fn )
 
 
     def do_up( self, args ):
@@ -623,20 +655,19 @@ class Shell( cmd.Cmd ):
         return self.op_4d( data, op=torch.max )
 
 
-    def display_layer_data( self, layer_info, pp_fn ):
-        if layer_info.size( 0 ) != 1:
+    def display_layer_data( self, data, title, reduce_fn=None ):
+        if data.size( 0 ) != 1:
             self.error( "Unsupported data dimensions" )
             return
 
-        data = layer_info.data()
-        data = pp_fn( data ) if pp_fn else data
+        reduce_fn = torch.mean if reduce_fn is None else reduce_fn
         
         data = data.squeeze( 0 )
         index = np.arange( data.size( 0 ) )
         # The following statement is invariant to data of dimension ( 1 ).
         # such as a list of tensors. Along the first dimension, replace 
         # the elements with any remaining dimensions with their mean.
-        y_data = list( map( lambda x: torch.mean( x ).float().item(), data[ : ] ) )
+        y_data = list( map( lambda x: reduce_fn( x ).float().item(), data[ : ] ) )
         
         top5 = self.top_n( 5, y_data )
 
@@ -644,10 +675,27 @@ class Shell( cmd.Cmd ):
         ax.bar( index, y_data, align="center", width=1 )
         for i, v in top5:
             ax.text( i, v, "{}".format( i ) )
-        ax.set_title( "Histogram of layer {}".format( layer_info.id ) )
+        ax.set_title( "Histogram of layer {}".format( title ) )
         ax.grid()
         self.fig.show_graph()
 
+
+    def get_info_from_context( self, args ):
+        if args and args not in self.models:
+            self.error( "Could not find model {}".format( args ) )
+            return None, None
+        
+        if not args and not self.cur_model:
+            self.error( "No default model is set. Please set a model first" )
+            return None, None
+
+        model_info = self.models[ args ] if args else self.cur_model
+        layer_info = model_info.get_cur_layer_info()
+
+        id, layer = model_info.get_cur_id_layer()
+        self.message( "Current layer is {}: {}".format( id, layer ) )
+
+        return model_info, layer_info
 
     ####################################################
     # Helper functions to debugger functionality go here
