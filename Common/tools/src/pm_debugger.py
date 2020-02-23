@@ -7,7 +7,7 @@ import atexit
 from collections import OrderedDict
 import curses
 from curses import wrapper
-
+from functools import reduce
 import matplotlib
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 unused import
@@ -318,35 +318,15 @@ class Shell( cmd.Cmd ):
             self.error( sys.exc_info()[ 1 ] )
 
 
-    def do_set_model( self, args ):
-        model_name = args if args else "model"
-        model = self.load_from_context( model_name )
-        if model is None:
-            self.error( "Could not find a model by name \"{}\"".format( model_name ) )
+    def do_nparams( self, args ):
+        model_info, _  = self.get_info_from_context( args )
+        if model_info is None:
+            self.message( "Model \"{}\" not found. Please set the model in context first".format( args ) )
             return
 
-        if not isinstance( model, nn.Module ):
-            self.error( "{} is not a valid model" )
-            return
-
-        if model_name in self.models:
-            self.cur_model = self.models[ model_name ]
-        else:
-            self.cur_model = ModelMeta( model )
-            self.models[ model_name ] = self.cur_model
-        self.message( "Context now is-> {}".format( model_name ) )
-    
-
-    def do_resync( self, args ):
-        if not args:
-            self.error( "Please provide a model name" )
-            return
-
-        if args not in self.models:
-            self.error( "Model \"{}\" not in context".format( args ) )
-            return
-
-        self.resync_model( args )
+        model = model_info.model
+        n =  sum( reduce( lambda x, y: x * y, p.size() ) for p in model.parameters())
+        print( "{:,}".format( n ) )
 
 
     def do_load_image( self, args ):
@@ -419,38 +399,6 @@ class Shell( cmd.Cmd ):
     do_show_img = do_show_image
 
 
-    def do_set_post_process( self, args ):
-        if args == "relu":
-            fn = torch.nn.ReLU()
-        elif args == "mean":
-            fn = torch.mean
-        elif args == "max":
-            fn = torch.max
-        elif args == "none" or args == "None":
-            fn = None
-        else:
-            fn = self.load_from_context( args )
-            if not fn:
-                self.error( "Could not find function \"{}\"".format( args ) )
-                return
-
-        if not fn:
-            self.message( "Removing post processing function" )
-            self.data_post_process_fn = None
-            return
-
-        if fn and not callable( fn ):
-            self.error( "Not a valid function" )
-            return
-
-        self.data_post_process_fn = fn
-        if not hasattr( self.data_post_process_fn, "__name__" ):
-            self.data_post_process_fn.__name__ = args
-        self.message( "Post process function is {}".format( self.data_post_process_fn.__name__ ) )
-
-    do_set_postp = do_set_post_process
-
-
     def do_show_first_layer_weights( self, args ):
         if args and args not in self.models:
             self.error( "Could not find \"{}\" in context. Please set this model in context first.".format( args ) )
@@ -501,6 +449,9 @@ class Shell( cmd.Cmd ):
             self.error( "Please load an input image first" )
             return
 
+        id, layer = layer_info.id, layer_info.layer
+        self.message( "Current layer is {}: {}".format( id, layer ) )
+
         layer_info.register_forward_hook()
         self.message( "Registered forward hook" )
 
@@ -520,6 +471,9 @@ class Shell( cmd.Cmd ):
         model_info, layer_info = self.get_info_from_context( args )
         if model_info is None:
             return
+
+        id, layer = layer_info.id, layer_info.layer
+        self.message( "Current layer is {}: {}".format( id, layer ) )
 
         if self.data_post_process_fn:
             self.message( "Post processing function is {}".format( self.data_post_process_fn.__name__ ) )
@@ -541,6 +495,9 @@ class Shell( cmd.Cmd ):
         if model_info is None:
             return
     
+        id, layer = layer_info.id, layer_info.layer
+        self.message( "Current layer is {}: {}".format( id, layer ) )
+
         if self.data_post_process_fn:
             self.message( "Post processing function is {}".format( self.data_post_process_fn.__name__ ) )
 
@@ -551,6 +508,69 @@ class Shell( cmd.Cmd ):
         else:
             title = "{} gradients".format( layer_info.id )
             self.display_layer_data( data, title, reduce_fn=self.data_post_process_fn )
+
+
+    def do_set_model( self, args ):
+        model_name = args if args else "model"
+        model = self.load_from_context( model_name )
+        if model is None:
+            self.error( "Could not find a model by name \"{}\"".format( model_name ) )
+            return
+
+        if not isinstance( model, nn.Module ):
+            self.error( "{} is not a valid model" )
+            return
+
+        if model_name in self.models:
+            self.cur_model = self.models[ model_name ]
+        else:
+            self.cur_model = ModelMeta( model )
+            self.models[ model_name ] = self.cur_model
+        self.message( "Context now is-> {}".format( model_name ) )
+    
+
+    def do_resync( self, args ):
+        if not args:
+            self.error( "Please provide a model name" )
+            return
+
+        if args not in self.models:
+            self.error( "Model \"{}\" not in context".format( args ) )
+            return
+
+        self.resync_model( args )
+
+
+    def do_set_post_process( self, args ):
+        if args == "relu":
+            fn = torch.nn.ReLU()
+        elif args == "mean":
+            fn = torch.mean
+        elif args == "max":
+            fn = torch.max
+        elif args == "none" or args == "None":
+            fn = None
+        else:
+            fn = self.load_from_context( args )
+            if not fn:
+                self.error( "Could not find function \"{}\"".format( args ) )
+                return
+
+        if not fn:
+            self.message( "Removing post processing function" )
+            self.data_post_process_fn = None
+            return
+
+        if fn and not callable( fn ):
+            self.error( "Not a valid function" )
+            return
+
+        self.data_post_process_fn = fn
+        if not hasattr( self.data_post_process_fn, "__name__" ):
+            self.data_post_process_fn.__name__ = args
+        self.message( "Post process function is {}".format( self.data_post_process_fn.__name__ ) )
+
+    do_set_postp = do_set_post_process
 
 
     def do_up( self, args ):
@@ -691,9 +711,6 @@ class Shell( cmd.Cmd ):
 
         model_info = self.models[ args ] if args else self.cur_model
         layer_info = model_info.get_cur_layer_info()
-
-        id, layer = model_info.get_cur_id_layer()
-        self.message( "Current layer is {}: {}".format( id, layer ) )
 
         return model_info, layer_info
 
