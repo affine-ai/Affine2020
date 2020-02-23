@@ -1,5 +1,6 @@
 from Affine.Vision.classification.src.darknet53 import darknet
 from dataset_utils import load_imagenet_data as load_data, load_imagenet_val as load_val
+from dataset_utils import data_prefetcher
 from train_utils import parse_args, AverageMeter, ProgressMeter, Config, setup_and_launch
 
 import os, time, datetime
@@ -22,20 +23,23 @@ try:
 except:
     APEX_AVAILABLE = False
 
-torch.backends.cudnn.benchmark = True
-torch.backends.cudnn.enabled = True
+HTIME = lambda t: time.strftime( "%H:%M:%S", time.gmtime( t ) )
 
 def main_worker( gpu, args, config ):
     best_acc1 = 0
-    if gpu % args.gpus_per_node == 0:
+
+    torch.backends.cudnn.benchmark = True
+    torch.backends.cudnn.enabled = True
+    
+    args.writer = None
+    if args.gpu or gpu % args.gpus_per_node == 0:
         args.writer = SummaryWriter( filename_suffix="{}".format( gpu ) )
-    else:
-        args.writer = None
 
     if args.gpu is None:
         dist.init_process_group( backend=args.dist_backend, 
                                  init_method="tcp://10.0.1.164:12345", 
                                  world_size=args.world_size, rank=gpu )
+
         print( "Process: {}, rank: {}, world_size: {}".format( gpu, dist.get_rank(), dist.get_world_size() ) )
 
     # Set the default device, any tensors created by cuda by 'default' will use this device
@@ -49,21 +53,20 @@ def main_worker( gpu, args, config ):
     model.cuda( gpu )
 
     criterion = nn.CrossEntropyLoss().cuda( gpu )
-    #optimizer = optim.SGD( model.parameters(), 
-    #                       lr=args.base_lr, 
-    #                       momentum=args.momentum, 
-    #                       weight_decay=args.weight_decay )
-    optimizer = optim.AdamW( model.parameters(), 
-                           lr=args.base_lr, 
+    optimizer = optim.SGD( model.parameters(), 
+                           lr=args.base_lr,
+                           momentum=args.momentum,
                            weight_decay=args.weight_decay )
 
     # Nvidia documentation states - 
     # "O2 exists mainly to support some internal use cases. Please prefer O1"
     # https://github.com/NVIDIA/apex/tree/master/examples/imagenet
-    model, optimizer = amp.initialize( model, optimizer, 
-                                       opt_level="O1" )
+    model, optimizer = amp.initialize( model, optimizer, opt_level="O1" )
 
     if args.gpu is None:
+        # By default, apex.parallel.DistributedDataParallel overlaps communication 
+        # with computation in the backward pass.
+        # delay_allreduce delays all communication to the end of the backward pass.
         model = apex.parallel.DistributedDataParallel( model )
 
     if args.resume:
@@ -73,14 +76,13 @@ def main_worker( gpu, args, config ):
         model.load_state_dict( checkpoint[ "model" ] )
         optimizer.load_state_dict( checkpoint[ "optimizer" ] )
         amp.load_state_dict( checkpoint[ "amp" ] )
+        del checkpoint
 
     if args.evaluate:
         train_or_eval( False, gpu, val_loader, model, criterion, None, args, 0 )
         return
 
-    ################################
-    # Main training loop starts here
-    ################################
+
     start_epoch = args.start_epoch - 1
     end_epoch = start_epoch + args.epochs
 
@@ -116,19 +118,23 @@ def train_or_eval( train, gpu, loader, model, criterion, optimizer, args, epoch 
     losses = AverageMeter( "Loss", ":.4e" )
     top1 = AverageMeter( "Accuracy1", ":6.2f" )
     top5 = AverageMeter( "Accuracy5", ":6.2f" )
-    n_inputs = len( loader )
-
     prefix = "Epoch:[{}]".format( epoch + 1 ) if train else "Test: "
-    progress = ProgressMeter( n_inputs, [ losses, top1, top5 ], prefix=prefix )
+    progress = ProgressMeter( len( loader ), [ losses, top1, top5 ], prefix=prefix )
 
-    time0 = time.time()
+    prefetcher = data_prefetcher( loader )
+    
+    total_time = [ 0.0 ] * 5
+    time0 = time_init = time.time()
 
     with torch.set_grad_enabled( mode=train ):
-        for i, ( images, target ) in enumerate( loader ):
+        for i, ( images, target ) in enumerate( prefetcher ):
             images = images.cuda( gpu, non_blocking=True )
             target = target.cuda( gpu, non_blocking=True )
+            time_dataload = time.time()
+
             output = model( images )
             loss = criterion( output, target )
+            time_forward = time.time()
 
             batch_size = images.size( 0 )
             acc1, acc5 = accuracy( output, target, topk=( 1, 5 ) )
@@ -136,25 +142,45 @@ def train_or_eval( train, gpu, loader, model, criterion, optimizer, args, epoch 
             top1.update( acc1[ 0 ], batch_size )
             top5.update( acc5[ 0 ], batch_size )
 
-            if i % 200 == 0:
-                progress.display( i )
-            
+            time_loss_update = time.time()
+            time_backward = time.time()
             # All the code that needs to run only when training goes here
             if train:
-                n_iter = epoch * n_inputs + i
+                n_iter = epoch * len( loader ) + i
                 lr = adjust_learning_rate( optimizer, n_iter, args, policy="triangle" )
+
                 optimizer.zero_grad()
+                
                 with amp.scale_loss( loss, optimizer ) as scaled_loss:
                     scaled_loss.backward()
+                
                 optimizer.step()
+                time_backward = time.time()
 
                 if ( i % 100 == 0 ) and ( gpu % args.gpus_per_node == 0 ):
                     args.writer.add_scalar( "Loss/train/gpu{}".format( gpu ), loss.item(), n_iter )
                     args.writer.add_scalar( "Accuracy/train/gpu{}".format( gpu ), acc1, n_iter )
                     args.writer.add_scalar( "Loss/Accuracy", acc1, lr * 10000 )
             # End of training specific code
-    
-    print( "Epoch time: {}".format( datetime.timedelta( seconds=time.time() - time0 ) ) )
+            time_misc = time.time()            
+
+            time_markers = [ time_init, time_dataload, time_forward, time_loss_update, time_backward, time_misc ]
+            time_delta = time_markers[ 1: ] - time_markers[ :-1 ]
+            total_time += time_delta
+
+            if  i % 200 == 0 and gpu % args.gpus_per_node == 0:
+                progress.display( i )
+                for x, y in ( ( "Time loading data:", HTIME( total_time[ 0 ] ) ),
+                              ( "Time forward:", HTIME( total_time[ 1 ] ) ),
+                              ( "Time loss update:", HTIME( total_time[ 2 ] ) ),
+                              ( "Time backward:", HTIME( total_time[ 3 ] ) ),
+                              ( "Time misc:", HTIME( total_time[ 4 ] ) )
+                            ):
+                    print( "{:<25s}{}".format( x, y ) )
+                print()
+            time_init = time.time()
+            
+    print( "Total epoch time: {}".format( HTIME( time.time() - time0 ) ) )
     return top1.avg
 
 

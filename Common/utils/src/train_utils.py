@@ -20,8 +20,6 @@ def parse_args():
                          help="resume from last stored checkpoint" )
     parser.add_argument( "--resume-from", type=str, default="",
                          help="resume from given checkpoint" )
-    parser.add_argument( "--debug", default=False,
-                         help="enable debug mode" )
 
     # optimizer parameters
     parser.add_argument( "--learning-rate", "--lr", default=0.01, type=float,
@@ -62,7 +60,11 @@ def parse_args():
                          help="url used to setup distributed training" )
     parser.add_argument( "--dist-backend", default="nccl", type=str,
                          help="distributed backend" )
-
+    # debugging and profiling
+    parser.add_argument( "--debug", default=False,
+                         help="enable debug mode" )
+    parser.add_argument( "--prof", default=False,
+                         help="enable profiling" )
     return parser.parse_args()
 
 
@@ -81,7 +83,7 @@ def setup_and_launch( worker_fn=None, config=None ):
     args = parse_args()
 
     gpus_per_node = torch.cuda.device_count()
-    print( "{} GPUs found".format( gpus_per_node ) )
+    print( "Found {} GPUs".format( gpus_per_node ) )
     args.gpus_per_node = gpus_per_node
 
     np.random.seed( 42 )
