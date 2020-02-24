@@ -103,7 +103,7 @@ class ModelMeta( object ):
         return self.traverse_updown( dir=1 )
 
     def traverse_updown( self, dir ):
-        id = self.get_cur_layer_info().id
+        id = self.cur_layer.id
         new_id, new_layer = self.find_instance_by_id( id, dir=dir )
         
         if not new_id:
