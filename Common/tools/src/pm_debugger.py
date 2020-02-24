@@ -2,6 +2,7 @@
 from Affine.Vision.classification.src.darknet53 import Darknet53, darknet
 
 import os, sys, code, traceback
+from pathlib import Path
 import cmd, readline
 import atexit
 from collections import OrderedDict
@@ -16,6 +17,7 @@ from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 unused import
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torchvision
 from torchvision import transforms, datasets
 from torchvision.models import *
@@ -53,22 +55,68 @@ class GraphWindow( object ):
             return self.cur_ax
 
     def imshow( self, image, persist=False, dontshow=False, **kwargs ):
-        if image.dim() == 4:
-            image = image.squeeze( 0 )
-        if image.dim() == 3 and image.size()[ -1 ] is not 3:
-            image = image.permute( 1, 2, 0 )
+        if isinstance( image, torch.Tensor ):
+            if image.dim() == 4 and image.size( 0 ) == 1:
+                image = image.squeeze( 0 )
+            if image.size()[ -1 ] is not 3:
+                image = image.permute( 1, 2, 0 )
+        elif isinstance( image, np.ndarray ):
+            if image.shape[ 0 ] == 1:
+                image = image[ 0 ]
+            if image.shape[ -1 ] is not 3:
+                image = image.transpose( 1, 2, 0 )
+        else:
+            return False
+
         ax = self.current_axes( persist=persist )
         ax.imshow( image, **kwargs )
         self.fig.canvas.draw()
         if not dontshow:
             self.fig.show()
-        
+        return True
+
     def show_graph( self ):
         self.fig.canvas.draw()
         self.fig.show()
 
     def close( self ):
         plt.close()
+
+class Dataset( object ):
+    def __init__( self, path ):
+        self.data = None
+        self.data_path = path
+        self.cur_dir = path
+        self.file_iter = None
+        self.set_class( 0 )
+
+    def set_class( self, label ):
+        listdir = os.listdir( self.data_path )
+        listdir.sort()
+        label = int( label )
+        try:
+            dir = listdir[ label ]
+        except:
+            return False
+        path = os.path.join( self.data_path, dir )
+        if os.path.isdir( path ):
+            self.cur_dir = path
+            if self.file_iter:
+                self.file_iter.close()
+                self.file_iter = None
+            return True
+        else:
+            return False
+
+    def next( self ):
+        if self.file_iter is None:
+            self.file_iter = iter( Path( self.cur_dir ).iterdir() )
+
+        image_file = next( self.file_iter )
+        if image_file.is_file():
+            return str( image_file ), image_file.name
+        else:
+            return None, None
 
 class ModelMeta( object ):
     def __init__( self, model ):
@@ -248,6 +296,7 @@ class Shell( cmd.Cmd ):
     def __init__( self, config ):
         super().__init__()
         self.config = config
+        self.dataset = None
         self.image_size = 224
         self.rc_lines = []
         self.device = "cpu"
@@ -268,6 +317,8 @@ class Shell( cmd.Cmd ):
         self.init_history( histfile=".pmdebug_history" )
         atexit.register( self.save_history, histfile=".pmdebug_history" )
 
+        if config.dataset:
+            self.dataset = Dataset( config.dataset )
 
     ##############################################
     # Functions overridden from base class go here
@@ -363,8 +414,26 @@ class Shell( cmd.Cmd ):
         image = Image.open( image_path )
         transform = transforms.Compose( [ transforms.Resize( ( self.image_size, self.image_size ) ),
                                             transforms.ToTensor() ] )
-        image = transform( image ).float()
-        image = image.view( 1, *image.shape )
+        image = transform( image ).float().unsqueeze( 0 )
+
+
+    def do_image_next( self, args ):
+        global image
+        
+        if self.dataset is None:
+            self.message( "Please configure a dataset first" )
+            return
+
+        image_path, _ = self.dataset.next()
+        if not os.path.isfile( image_path ):
+            self.error( "Image not found")
+            return
+        self.message( "Loading image {}".format( image_path ) )
+        image = Image.open( image_path )
+        transform = transforms.Compose( [ transforms.Resize( ( self.image_size, self.image_size ) ),
+                                            transforms.ToTensor() ] )
+        image = transform( image ).float().unsqueeze( 0 )
+        self.fig.imshow( image )
 
 
     def do_load_checkpoint( self, args ):
@@ -402,23 +471,30 @@ class Shell( cmd.Cmd ):
             self.error( "Could not find image" )
             return
 
-        if isinstance( img, torch.Tensor ):
-            if img.size( 0 ) == 1:
-                img = img.squeeze( 0 )
-            if img.size( 2 ) != 3:
-                img = img.permute( 1, 2, 0 )
-        elif isinstance( img, np.ndarray ):
-            if img.shape[ 0 ] == 1:
-                img = img[ 0 ]
-            if img.shape[ 2 ] != 3:
-                img = img.transpose( 1, 2, 0 )
-        else:
+        if not self.fig.imshow( img ):
             self.error( "Unsupported image type" )
             return
 
-        self.fig.imshow( img )
-    
     do_show_img = do_show_image
+
+
+    def do_infer_image( self, args ):
+        model_info, _ = self.get_info_from_context( args )
+        if model_info is None:
+            return
+
+        img = self.load_from_context( "image" )
+        if img is None:
+            self.error( "Please load an input image first" )
+            return
+
+        net = model_info.model
+        out = net( image )
+        probs, idxs = F.softmax( out, dim=1 ).topk( 5, dim=1 )
+        for idx, prob in zip( idxs[ 0 ], probs[ 0 ] ):
+            self.message( "{:<10}{:4.1f}".format( idx.data, prob.data * 100 ) )
+
+    do_infer = do_infer_image
 
 
     def do_show_first_layer_weights( self, args ):
@@ -481,8 +557,8 @@ class Shell( cmd.Cmd ):
             self.message( "Post processing function is {}".format( self.data_post_process_fn.__name__ ) )
 
         net = model_info.model
-        _ = net( image )
-
+        out = net( image )
+        self.message( "Out: {}".format( out.argmax() ) )
         title = "{} activations".format( layer_info.id )
         self.display_layer_data( layer_info.data(), title, reduce_fn=self.data_post_process_fn )
 
@@ -499,7 +575,7 @@ class Shell( cmd.Cmd ):
 
         img = self.load_from_context( "image" )
         if img is None:
-            self.error( "Please load an input image first" )
+            self.error( "No input image available" )
             return
 
         id, layer = model_info.find_last_instance( layer=nn.Conv2d )
@@ -656,6 +732,14 @@ class Shell( cmd.Cmd ):
             self.message( "Already at bottom" )
         id, layer = self.cur_model.get_cur_id_layer()
         self.message( "Current layer is {}: {}".format( id, layer ) )
+
+
+    def do_set_class( self, args ):
+        if self.dataset is None:
+            self.error( "No dataset is configured" )
+        idx = int( args )
+        if not self.dataset.set_class( idx ):
+            self.error( "Could not set class to {}".format( args ) )
 
 
     ###########################
