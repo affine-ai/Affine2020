@@ -10,6 +10,7 @@ from curses import wrapper
 from functools import reduce
 import matplotlib
 import matplotlib.pyplot as plt
+from matplotlib import cm, colors
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 unused import
 
 import numpy as np
@@ -19,6 +20,7 @@ import torchvision
 from torchvision import transforms, datasets
 from torchvision.models import *
 from PIL import Image
+import skimage
 
 # Disable the top menubar on plots
 matplotlib.rcParams[ "toolbar" ] = "None"
@@ -36,20 +38,31 @@ config = Config()
 class GraphWindow( object ):
     def __init__( self ):
         self.fig = plt.figure()
+        self.cur_ax = None
 
     def reset_window( self ):
         for ax in self.fig.axes:
             self.fig.delaxes( ax )
 
-    def current_axes( self ):
-        self.reset_window()
-        return self.fig.subplots( 1, 1 )
+    def current_axes( self, persist=False ):
+        if persist and self.cur_ax is not None:
+            return self.cur_ax
+        else:
+            self.reset_window()
+            self.cur_ax = self.fig.subplots( 1, 1 )
+            return self.cur_ax
 
-    def imshow( self, image ):
-        ax = self.current_axes()
-        ax.imshow( image )
-        self.show_graph()
-
+    def imshow( self, image, persist=False, dontshow=False, **kwargs ):
+        if image.dim() == 4:
+            image = image.squeeze( 0 )
+        if image.dim() == 3 and image.size()[ -1 ] is not 3:
+            image = image.permute( 1, 2, 0 )
+        ax = self.current_axes( persist=persist )
+        ax.imshow( image, **kwargs )
+        self.fig.canvas.draw()
+        if not dontshow:
+            self.fig.show()
+        
     def show_graph( self ):
         self.fig.canvas.draw()
         self.fig.show()
@@ -62,23 +75,26 @@ class ModelMeta( object ):
         self.model = model
         self.cur_layer = None
         self.layers = OrderedDict()
+        self.init_layer()
 
     def init_layer( self ):
-        id, layer = self.find_last_instance( self.model, layer=nn.ReLU )
+        id, layer = self.find_last_instance( layer=nn.ReLU )
         layer_info = LayerMeta( layer, id )
         self.layers[ tuple( id ) ] = layer_info
         self.cur_layer = layer_info
-        return layer_info
 
     def get_cur_id_layer( self ):
         if not self.cur_layer:
             self.init_layer()
         return self.cur_layer.id, self.cur_layer.layer
 
-    def get_cur_layer_info( self ):
-        if not self.cur_layer:
-            self.init_layer()
-        return self.cur_layer
+    def get_layer_info( self, id, layer ):
+        if tuple( id ) in self.layers:
+            layer_info = self.layers[ tuple( id ) ]
+        else:
+            layer_info = LayerMeta( layer, id )
+            self.layers[ tuple( id ) ] = layer_info
+        return layer_info
 
     def up( self ):
         return self.traverse_updown( dir=-1 )
@@ -88,21 +104,22 @@ class ModelMeta( object ):
 
     def traverse_updown( self, dir ):
         id = self.get_cur_layer_info().id
-        new_id, new_layer = self.find_instance_by_id( self.model, id, dir=dir )
+        new_id, new_layer = self.find_instance_by_id( id, dir=dir )
         
         if not new_id:
             return False
 
         id, layer = new_id, new_layer
 
-        if tuple( id ) in self.layers:
-            self.cur_layer = self.layers[ tuple( id ) ]
-        else:
-            self.cur_layer = LayerMeta( layer, id )
-            self.layers[ tuple( id ) ] = self.cur_layer
+        self.cur_layer = self.get_layer_info( id, layer )
         return True
 
-    def find_instance_by_id( self, net, key, dir ):
+    def find_instance_by_id( self, key, dir, net=None ):
+        """This function implements a depth first search that terminates 
+        as soon as a sufficient condition is met
+        """
+        net = self.model if net is None else net
+
         cur_frame = []
         frame = []
         leaf = None
@@ -148,9 +165,12 @@ class ModelMeta( object ):
         return frame, leaf
 
 
-    def find_last_instance( self, net, layer=nn.Conv2d, cur_frame=[], found_frame=[] ):
+    def find_last_instance( self, layer=nn.Conv2d, net=None, cur_frame=[], found_frame=[] ):
         """This method does a depth first search and finds the last instance of the
-        specifiied layer in the tree"""
+        specifiied layer in the tree
+        """
+        net = self.model if net is None else net
+        
         found = None
         ret_found = None
 
@@ -162,7 +182,7 @@ class ModelMeta( object ):
                 if cur_frame > found_frame:
                     found_frame = cur_frame.copy()
 
-            found_frame, ret_found = self.find_last_instance( l, layer=layer,
+            found_frame, ret_found = self.find_last_instance( layer=layer, net=l,
                                                             cur_frame=cur_frame, 
                                                             found_frame=found_frame )
             if isinstance( ret_found, layer ):
@@ -328,6 +348,8 @@ class Shell( cmd.Cmd ):
         n =  sum( reduce( lambda x, y: x * y, p.size() ) for p in model.parameters())
         print( "{:,}".format( n ) )
 
+    do_nparam = do_nparams
+
 
     def do_load_image( self, args ):
         """load a single image"""
@@ -465,6 +487,48 @@ class Shell( cmd.Cmd ):
         self.display_layer_data( layer_info.data(), title, reduce_fn=self.data_post_process_fn )
 
     do_show_act = do_show_activations
+
+
+    def do_show_heatmap( self, args ):
+        idx = eval( args ) if args else 0
+
+        model_info = self.cur_model
+        if model_info is None:
+            self.message( "Please set a model in context first" )
+            return
+
+        img = self.load_from_context( "image" )
+        if img is None:
+            self.error( "Please load an input image first" )
+            return
+
+        id, layer = model_info.find_last_instance( layer=nn.Conv2d )
+        layer_info = model_info.get_layer_info( id, layer )
+        layer_info.register_forward_hook()
+        self.message( "Registered forward hook" )
+
+        net = model_info.model
+        _ = net( image )
+
+        _, fc = model_info.find_last_instance( layer=nn.Linear )
+        fc_weights = fc.weight[ idx ].data.numpy()
+
+        activations = layer_info.data()[ 0 ].data.numpy()        
+        nc, h, w = activations.shape
+        
+        cam = fc_weights.reshape( 1, nc ).dot( activations.reshape( nc, h * w ) )
+        cam = cam.reshape( h, w )
+        cam = ( cam - np.min( cam ) ) / np.max( cam )
+        cam = Image.fromarray( cam )
+
+        _, _, h, w = img.size()     
+        cam = cam.resize( ( h, w ), Image.BICUBIC )
+        cam = transforms.ToTensor()( cam )[ 0 ]
+
+        self.fig.imshow( img, dontshow=True )
+        self.fig.imshow( cam, persist=True, cmap=cm.jet, norm=colors.Normalize(), alpha=0.5 )
+
+    do_show_heat = do_show_heatmap
 
 
     def do_show_weights( self, args ):
@@ -710,7 +774,7 @@ class Shell( cmd.Cmd ):
             return None, None
 
         model_info = self.models[ args ] if args else self.cur_model
-        layer_info = model_info.get_cur_layer_info()
+        layer_info = model_info.cur_layer
 
         return model_info, layer_info
 
