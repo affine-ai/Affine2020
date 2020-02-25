@@ -58,12 +58,12 @@ class GraphWindow( object ):
         if isinstance( image, torch.Tensor ):
             if image.dim() == 4 and image.size( 0 ) == 1:
                 image = image.squeeze( 0 )
-            if image.size()[ -1 ] is not 3:
+            if image.dim() is 3 and image.size()[ -1 ] is not 3:
                 image = image.permute( 1, 2, 0 )
         elif isinstance( image, np.ndarray ):
             if image.shape[ 0 ] == 1:
                 image = image[ 0 ]
-            if image.shape[ -1 ] is not 3:
+            if image.dim is 3 and image.shape[ -1 ] is not 3:
                 image = image.transpose( 1, 2, 0 )
         else:
             return False
@@ -566,8 +566,6 @@ class Shell( cmd.Cmd ):
 
 
     def do_show_heatmap( self, args ):
-        idx = eval( args ) if args else 0
-
         model_info = self.cur_model
         if model_info is None:
             self.message( "Please set a model in context first" )
@@ -584,8 +582,11 @@ class Shell( cmd.Cmd ):
         self.message( "Registered forward hook" )
 
         net = model_info.model
-        _ = net( image )
-
+        out = net( image )
+    
+        self.message( "Model guess: {}".format( out.argmax() ) )
+        
+        idx = eval( args ) if args else out.argmax()
         _, fc = model_info.find_last_instance( layer=nn.Linear )
         fc_weights = fc.weight[ idx ].data.numpy()
 
