@@ -374,14 +374,16 @@ class Shell( cmd.Cmd ):
     # All do_* command functions go here
     ####################################
     def do_quit( self, args ):
-        """Exits the shell"""
+        """Exits the shell
+        """
         self.message( "Exiting shell" )
         plt.close()
         raise SystemExit
 
 
     def do_summary( self, args ):
-        """Prints pytorch model summary"""
+        """Prints pytorch model summary
+        """
         try:
             for layer in model.layers:
                 self.message( "{}  {}".format( layer._get_name(), layer.size() ) )
@@ -390,6 +392,8 @@ class Shell( cmd.Cmd ):
 
 
     def do_nparams( self, args ):
+        """Print the total number of parameters in a model
+        """
         model_info, _  = self.get_info_from_context( args )
         if model_info is None:
             self.message( "Model \"{}\" not found. Please set the model in context first".format( args ) )
@@ -403,7 +407,9 @@ class Shell( cmd.Cmd ):
 
 
     def do_load_image( self, args ):
-        """load a single image"""
+        """Load a single image from the path specified
+        Usage: load image [ path ]
+        """
         global image
         
         image_path = os.path.join( self.config.image_path, args )
@@ -418,6 +424,14 @@ class Shell( cmd.Cmd ):
 
 
     def do_image_next( self, args ):
+        """Load the next available image from a dataset:
+        Usage: image next
+        
+        This command operates on a dataset. A dataset must be configued for this 
+        command. If there are no more images available to be loaded, it keeps the 
+        last available image.
+        The "image" global variable points to the loaded image.
+        """ 
         global image
         
         if self.dataset is None:
@@ -437,8 +451,10 @@ class Shell( cmd.Cmd ):
 
 
     def do_load_checkpoint( self, args ):
-        """Load a checkpoint file into the model.
-        If no file is specified, location specified in the
+        """Load a checkpoint file into the model:
+        Usage: load checkpoint [ filename ]
+
+        If no file is specified, checkpoint_name specified in the
         config file is used"""
         global model
         
@@ -466,7 +482,15 @@ class Shell( cmd.Cmd ):
 
 
     def do_show_image( self, args ):
-        img = self.load_from_context( args, default="image" )
+        """Display an image array:
+        Usage: show image [ image_var ]
+        
+        If an (optional) image_var is specified, it's considered as a global 
+        variable referencing an image array and tries to show this image.
+        If no args are specified, show the image referenced by the
+        global "image" variable.
+        """ 
+        img = self.load_from_global( args, default="image" )
         if img is None:
             self.error( "Could not find image" )
             return
@@ -479,11 +503,21 @@ class Shell( cmd.Cmd ):
 
 
     def do_infer_image( self, args ):
+        """Run inference on image:
+        Usage: infer image [ model_name ]
+
+        If an optional "model_name" is provided, inference is run
+        on that model. The "model_name" must be present in context.
+        If no "model_name" is provided, inference is run on the current 
+        model set in the context.
+
+        Input image is taken from the global "image" variable.
+        """
         model_info, _ = self.get_info_from_context( args )
         if model_info is None:
             return
 
-        img = self.load_from_context( "image" )
+        img = self.load_from_global( "image" )
         if img is None:
             self.error( "Please load an input image first" )
             return
@@ -517,17 +551,14 @@ class Shell( cmd.Cmd ):
         w = conv.weight.detach()
         w = w.permute( 0, 2, 3, 1 )
 
-        # Normalize w
-        #w = ( w - w.mean() ) / w.std()
-
-        nfilters = w.size()[ 0 ]
-        s = int( np.floor( np.sqrt( nfilters ) ) )
+        nc = w.size()[ 0 ]
+        s = int( np.floor( np.sqrt( nc ) ) )
         
         # if the number of filters is not a perfect square, we pad 
         # the tensor so that we can display it in a square grid
-        if pow( s, 2 ) < nfilters:
+        if pow( s, 2 ) < nc:
             s += 1
-            npad = pow( s, 2, nfilters )
+            npad = pow( s, 2, nc )
             w = torch.cat( ( w, torch.ones( ( npad, *w.size()[ 1: ] ) ) ), dim=0 )
 
         grid_w = torch.cat( tuple( torch.cat( tuple( w[ k ] for k in range( j * s, j * s + s ) ), dim=1 ) 
@@ -542,7 +573,7 @@ class Shell( cmd.Cmd ):
         if model_info is None:
             return
 
-        img = self.load_from_context( "image" )
+        img = self.load_from_global( "image" )
         if img is None:
             self.error( "Please load an input image first" )
             return
@@ -566,12 +597,13 @@ class Shell( cmd.Cmd ):
 
 
     def do_show_heatmap( self, args ):
-        model_info = self.cur_model
+        model_info, layer_info = self.get_info_from_context( args )
+        
         if model_info is None:
             self.message( "Please set a model in context first" )
             return
 
-        img = self.load_from_context( "image" )
+        img = self.load_from_global( "image" )
         if img is None:
             self.error( "No input image available" )
             return
@@ -583,10 +615,10 @@ class Shell( cmd.Cmd ):
 
         net = model_info.model
         out = net( image )
-    
-        self.message( "Model guess: {}".format( out.argmax() ) )
+
+        idx = out.argmax()
+        self.message( "Model guess: {}".format( idx ) )
         
-        idx = eval( args ) if args else out.argmax()
         _, fc = model_info.find_last_instance( layer=nn.Linear )
         fc_weights = fc.weight[ idx ].data.numpy()
 
@@ -606,6 +638,13 @@ class Shell( cmd.Cmd ):
         self.fig.imshow( cam, persist=True, cmap=cm.jet, norm=colors.Normalize(), alpha=0.5 )
 
     do_show_heat = do_show_heatmap
+
+
+    def do_heatmap_next( self, args ):
+        self.do_image_next( args=None )
+        self.do_show_heatmap( args=args )
+    
+    do_heat_next = do_heatmap_next
 
 
     def do_show_weights( self, args ):
@@ -653,7 +692,7 @@ class Shell( cmd.Cmd ):
 
     def do_set_model( self, args ):
         model_name = args if args else "model"
-        model = self.load_from_context( model_name )
+        model = self.load_from_global( model_name )
         if model is None:
             self.error( "Could not find a model by name \"{}\"".format( model_name ) )
             return
@@ -692,7 +731,7 @@ class Shell( cmd.Cmd ):
         elif args == "none" or args == "None":
             fn = None
         else:
-            fn = self.load_from_context( args )
+            fn = self.load_from_global( args )
             if not fn:
                 self.error( "Could not find function \"{}\"".format( args ) )
                 return
@@ -767,7 +806,7 @@ class Shell( cmd.Cmd ):
 
         del self.models[ name ]
         
-        new_model = self.load_from_context( name )
+        new_model = self.load_from_global( name )
         if new_model is not None and isinstance( new_model, nn.Module ):
             new_model_info = ModelMeta( new_model )
             self.models[ name ] = new_model_info
@@ -775,7 +814,7 @@ class Shell( cmd.Cmd ):
                 self.cur_model = new_model_info
 
 
-    def load_from_context( self, arg, default=None ):
+    def load_from_global( self, arg, default=None ):
         """This method first processes arg:
             1. If arg is in the global context, return it's value
             2. If arg is not in the global context:
