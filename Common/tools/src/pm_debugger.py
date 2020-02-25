@@ -432,21 +432,12 @@ class Shell( cmd.Cmd ):
         last available image.
         The "image" global variable points to the loaded image.
         """ 
-        global image
-        
         if self.dataset is None:
             self.message( "Please configure a dataset first" )
             return
 
         image_path, _ = self.dataset.next()
-        if not os.path.isfile( image_path ):
-            self.error( "Image not found")
-            return
-        self.message( "Loading image {}".format( image_path ) )
-        image = Image.open( image_path )
-        transform = transforms.Compose( [ transforms.Resize( ( self.image_size, self.image_size ) ),
-                                            transforms.ToTensor() ] )
-        image = transform( image ).float().unsqueeze( 0 )
+        self.do_load_image( image_path )
         self.fig.imshow( image )
 
 
@@ -641,7 +632,12 @@ class Shell( cmd.Cmd ):
 
 
     def do_heatmap_next( self, args ):
-        self.do_image_next( args=None )
+        if self.dataset is None:
+            self.error( "No dataset configured" )
+            return
+
+        image_path, _ = self.dataset.next()
+        self.do_load_image( image_path )
         self.do_show_heatmap( args=args )
     
     do_heat_next = do_heatmap_next
