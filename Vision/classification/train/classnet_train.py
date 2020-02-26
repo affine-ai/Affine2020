@@ -32,6 +32,10 @@ def main_worker( gpu, args, config ):
     args.writer = None
     distributed = not args.gpu
 
+    if args.lr_policy not in ( "triangle", "triangle2" ):
+        print( "Unsupported learning rate policy." )
+        raise SystemExit
+
     if not distributed or gpu % args.gpus_per_node == 0:
         args.writer = SummaryWriter( filename_suffix="{}".format( gpu ) )
 
@@ -148,9 +152,8 @@ def train_or_eval( train, gpu, loader, model, criterion, optimizer, args, epoch 
             t[2] = time.time()
             t[3] = time.time()
             
-            # All the code that needs to run only when training goes here
             if train:
-                lr = adjust_learning_rate( optimizer, n_iter, args, policy="triangle" )
+                lr = adjust_learning_rate( optimizer, n_iter, args, policy=args.lr_policy )
 
                 optimizer.zero_grad()
                 
@@ -173,12 +176,13 @@ def train_or_eval( train, gpu, loader, model, criterion, optimizer, args, epoch 
                 top1.update( acc1[0], images.size(0) )
                 top5.update( acc5[0], images.size(0) )
 
-            if  publish_stats:
+            if publish_stats:
+                progress.display( i )
+
+            if  train and publish_stats:
                 args.writer.add_scalar( "Loss/{}".format( phase ), loss.item(), n_iter )
                 args.writer.add_scalar( "Accuracy/{}".format( phase ), acc1, n_iter )
                 args.writer.add_scalar( "Loss/Accuracy", acc1, lr * 10000 )
-
-                progress.display( i )
                 for x, y in zip( markers, total ):
                     print( "{:<25s}{}".format( x, HTIME( y ) ) )
                 print()
@@ -207,13 +211,6 @@ def accuracy( outputs, targets, topk=(1, ) ):
             correct_k = correct[ :k ].view( -1 ).float().sum( 0, keepdim=True )
             res.append( correct_k.mul_( 100.0 / batch_size ) )
     return res
-
-def accuracy_with_score( outputs, targets ):
-    with torch.no_grad():
-        b = targets.size( 0 )
-        _, idx = outputs.topk( 1, dim=1, largest=True, sorted=True )
-        idx = idx.t()
-        correct = idx.eq( targets.expand_as( idx ) )
         
 def adjust_learning_rate( optimizer, i, args, policy="triangle" ):
     """learning rate schedule

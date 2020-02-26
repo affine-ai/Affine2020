@@ -10,7 +10,7 @@ import numpy as np
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument( "--config", type=str, default="config/yolov3_default.cfg",
+    parser.add_argument( "--config", type=str, default="config/train.cfg",
                          help="config file")
     parser.add_argument( "--evaluate", dest="evaluate", action="store_true", 
                          help="Run evaluation on validation set" )
@@ -22,8 +22,6 @@ def parse_args():
                          help="resume from given checkpoint" )
 
     # optimizer parameters
-    parser.add_argument( "--learning-rate", "--lr", default=0.01, type=float,
-                         help="learning rate" )
     parser.add_argument( "--momentum", default=0.9, type=float,
                          help="momentum")
     parser.add_argument( "--weight-decay", default=1e-6, type=float,
@@ -34,7 +32,9 @@ def parse_args():
                          help="max learning rate" )
     parser.add_argument( "--stepsize", default=1000, type=int,
                          help="half the number of iterations to cycle the learning rate" )
-
+    parser.add_argument( "--lr-policy", default="triangle", type=str,
+                         help="Select the learning rate adjustment policy" )    
+    
     # training parameters
     parser.add_argument( "--start-epoch", default=1, type=int,
                          help="start epoch number if different from 0" )
@@ -50,7 +50,7 @@ def parse_args():
     # distributed processing
     parser.add_argument( "--gpu", default=None, type=int, 
                          help="Force training on GPU id" )
-    parser.add_argument( "--workers", default=12, type=int,
+    parser.add_argument( "--workers", default=8, type=int,
                          help="number of data loading processes" )
     parser.add_argument( "--nnodes", default=1, type=int, 
                          help="number of nodes for distributed training" )
@@ -60,10 +60,11 @@ def parse_args():
                          help="url used to setup distributed training" )
     parser.add_argument( "--dist-backend", default="nccl", type=str,
                          help="distributed backend" )
+
     # debugging and profiling
     parser.add_argument( "--debug", default=False,
                          help="enable debug mode" )
-    parser.add_argument( "--prof", default=False,
+    parser.add_argument( "--prof", default=0, type=int,
                          help="enable profiling" )
     return parser.parse_args()
 
