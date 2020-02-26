@@ -20,8 +20,10 @@ matplotlib.rcParams[ "toolbar" ] = "None"
 class GraphWindow( object ):
     def __init__( self ):
         self.fig = plt.figure()
+        self.window_title = "PM Debug"
         self.cur_ax = None
-
+        self.fig.canvas.set_window_title( self. window_title )
+        
     def reset_window( self ):
         for ax in self.fig.axes:
             self.fig.delaxes( ax )
@@ -34,7 +36,7 @@ class GraphWindow( object ):
             self.cur_ax = self.fig.subplots( 1, 1 )
             return self.cur_ax
 
-    def imshow( self, image, persist=False, dontshow=False, **kwargs ):
+    def imshow( self, image, persist=False, dontshow=False, title = None, **kwargs ):
         if isinstance( image, np.ndarray ):
             image = torch.Tensor( image )
         
@@ -55,6 +57,8 @@ class GraphWindow( object ):
             kwargs[ "cmap" ] = "gray"
 
         ax = self.current_axes( persist=persist )
+        if title is not None:
+            ax.set_title( title )
         ax.imshow( image, **kwargs )
         self.fig.canvas.draw()
         if not dontshow:
@@ -68,12 +72,13 @@ class GraphWindow( object ):
     def close( self ):
         plt.close()
 
+
 class Dataset( object ):
     def __init__( self, path ):
         self.data = None
         self.data_path = path
         self.cur_dir = path
-        self.cur_image = None
+        self.cur_image_file = None
         self.file_iter = None
         self.set_class( 0 )
         self.image_size = 224
@@ -83,7 +88,7 @@ class Dataset( object ):
     def reset_class( self ):
         self.file_iter.close()
         self.file_iter = None
-        self.cur_image = None
+        self.cur_image_file = None
 
     def set_class( self, label ):
         listdir = os.listdir( self.data_path )
@@ -108,13 +113,13 @@ class Dataset( object ):
 
         image_file = next( self.file_iter )
         if image_file.is_file():
-            self.cur_image = image_file
+            self.cur_image_file = image_file
             return str( image_file ), image_file.name
         else:
             return None, None
 
     def load( self ):
-        image = Image.open( self.cur_image )
+        image = Image.open( self.cur_image_file )
         transform = transforms.Compose( self.transforms )
         return transform( image ).float().unsqueeze( 0 )
 

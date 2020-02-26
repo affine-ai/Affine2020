@@ -1,5 +1,4 @@
 #! /usr/bin/env python3
-from Affine.Vision.classification.src.darknet53 import Darknet53, darknet
 
 import os, sys, code, traceback
 import cmd, readline
@@ -14,7 +13,6 @@ import torchvision
 from torchvision import transforms, datasets
 from torchvision.models import *
 from PIL import Image
-
 from pm_helper_classes import * 
 
 
@@ -349,7 +347,6 @@ class Shell( cmd.Cmd ):
         out = net( image )
 
         idx = out.argmax()
-        self.message( "Model guess: {}".format( idx ) )
         
         _, fc = model_info.find_last_instance( layer=nn.Linear )
         fc_weights = fc.weight[ idx ].data.numpy()
@@ -365,8 +362,10 @@ class Shell( cmd.Cmd ):
         _, _, h, w = img.size()     
         cam = cam.resize( ( h, w ), Image.BICUBIC )
         cam = transforms.ToTensor()( cam )[ 0 ]
-
-        self.fig.imshow( img, dontshow=True )
+        
+        msg = "Model guess: {}".format( idx )
+        self.message( msg )
+        self.fig.imshow( img, title=msg, dontshow=True )
         self.fig.imshow( cam, persist=True, cmap=cm.jet, norm=colors.Normalize(), alpha=0.5 )
 
     do_show_heat = do_show_heatmap
@@ -440,6 +439,8 @@ class Shell( cmd.Cmd ):
             self.error( "{} is not a valid model" )
             return
 
+        # If model is already in context, we only need to switch the pointer
+        # Otherwise we need to set up the model in the context first
         if model_name in self.models:
             self.cur_model = self.models[ model_name ]
         else:
