@@ -1,5 +1,5 @@
 from Affine.Vision.classification.src.darknet53 import darknet
-from dataset_utils import load_imagenet_val as load_val
+from dataset_utils import load_imagenet_data as load_data, load_imagenet_val as load_val
 from dataset_utils import data_prefetcher
 from train_utils import parse_args, AverageMeter, ProgressMeter, Config, setup_and_launch
 
@@ -123,8 +123,8 @@ def train_or_eval( train, gpu, loader, model, criterion, optimizer, args, epoch 
     # GPU operation. However, it is very lightweight and can be left working all the time 
     # for a relative estimation of how the training loop is performing.
     markers = ( "Time loading data:", "Time forward:", "Time backward:" )
-    t = torch.zeros( [ len( markers ) ], dtype=float )
-    total = torch.zeros( [ len( markers ) - 1 ], dtype=float )
+    t = torch.zeros( [ len( markers ) + 1 ], dtype=float )
+    total = torch.zeros( [ len( markers ) ], dtype=float )
     
     if args.prof:
         print( "Profiling started" )
@@ -135,6 +135,8 @@ def train_or_eval( train, gpu, loader, model, criterion, optimizer, args, epoch 
     with torch.set_grad_enabled( mode=train ):
         for i, ( images, target ) in enumerate( prefetcher ):
             t[1] = time.time()
+            n_iter = epoch * len( loader ) + i
+
             if args.prof: torch.cuda.nvtx.range_push( "Prof start iteration {}".format( i ) )
 
             if args.prof: torch.cuda.nvtx.range_push( "forward" )
@@ -145,10 +147,9 @@ def train_or_eval( train, gpu, loader, model, criterion, optimizer, args, epoch 
 
             t[2] = time.time()
             t[3] = time.time()
-
+            
             # All the code that needs to run only when training goes here
             if train:
-                n_iter = epoch * len( loader ) + i
                 lr = adjust_learning_rate( optimizer, n_iter, args, policy="triangle" )
 
                 optimizer.zero_grad()
@@ -162,17 +163,17 @@ def train_or_eval( train, gpu, loader, model, criterion, optimizer, args, epoch 
                 optimizer.step()
                 if args.prof: torch.cuda.nvtx.range_pop()
                 t[3] = time.time()
-            else:
-                top1.update( acc1[0], images.size(0) )
 
             total += t[ 1: ] - t[ :-1 ]
 
-            if  i % 100 == 0 and gpu % args.gpus_per_node == 0:
+            publish_stats = i % 100 == 0 and gpu % args.gpus_per_node == 0
+            if not train or publish_stats:
                 acc1, acc5 = accuracy( output.detach(), target, topk=( 1, 5 ) )
                 losses.update( loss.item(), images.size(0) )
                 top1.update( acc1[0], images.size(0) )
                 top5.update( acc5[0], images.size(0) )
 
+            if  publish_stats:
                 args.writer.add_scalar( "Loss/{}".format( phase ), loss.item(), n_iter )
                 args.writer.add_scalar( "Accuracy/{}".format( phase ), acc1, n_iter )
                 args.writer.add_scalar( "Loss/Accuracy", acc1, lr * 10000 )
@@ -213,7 +214,7 @@ def accuracy_with_score( outputs, targets ):
         _, idx = outputs.topk( 1, dim=1, largest=True, sorted=True )
         idx = idx.t()
         correct = idx.eq( targets.expand_as( idx ) )
-
+        
 def adjust_learning_rate( optimizer, i, args, policy="triangle" ):
     """learning rate schedule
     """
