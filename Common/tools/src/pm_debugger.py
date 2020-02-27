@@ -447,6 +447,7 @@ class Shell( cmd.Cmd ):
             self.cur_model = ModelMeta( model )
             self.models[ model_name ] = self.cur_model
         self.message( "Context now is-> {}".format( model_name ) )
+        self.fig.set_window_title( model_name )
     
 
     def do_resync( self, args ):

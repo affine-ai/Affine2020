@@ -22,8 +22,15 @@ class GraphWindow( object ):
         self.fig = plt.figure()
         self.window_title = "PM Debug"
         self.cur_ax = None
-        self.fig.canvas.set_window_title( self. window_title )
-        
+        self.set_window_title()
+
+    def set_window_title( self, title=None ):
+        if title is None:
+            t = self.window_title
+        else:
+            t = "{} ( {} )".format( self.window_title, title )
+        self.fig.canvas.set_window_title( t )
+
     def reset_window( self ):
         for ax in self.fig.axes:
             self.fig.delaxes( ax )
@@ -82,8 +89,7 @@ class Dataset( object ):
         self.file_iter = None
         self.set_class( 0 )
         self.image_size = 224
-        self.transforms = [ transforms.Resize( ( self.image_size, self.image_size ) ),
-                            transforms.ToTensor() ]
+        self.my_transforms = [ transforms.Resize( ( self.image_size, self.image_size ) ) ]
 
     def reset_class( self ):
         self.file_iter.close()
@@ -120,17 +126,17 @@ class Dataset( object ):
 
     def load( self ):
         image = Image.open( self.cur_image_file )
-        transform = transforms.Compose( self.transforms )
-        return transform( image ).float().unsqueeze( 0 )
+        transform = transforms.Compose( self.my_transforms )
+        return transforms.ToTensor()( transform( image ) ).unsqueeze( 0 )
 
     def suffix( self, suffix ):
         pass
 
     def add_transform( self, t, index=1 ):
-        self.transforms.insert( index, t )
+        self.my_transforms.append( t )
 
     def del_transform( self, index ):
-        self.transforms.pop( index )
+        self.my_transforms.pop( index )
 
 class ModelMeta( object ):
     def __init__( self, model ):
