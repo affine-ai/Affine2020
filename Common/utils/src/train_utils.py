@@ -189,7 +189,7 @@ def adjust_learning_rate( optimizer, i, args, policy ):
         raise SystemExit
      
     cycle = math.floor( 1 + i / ( 2 * args.stepsize ) )
-    if policy is "triangle2":
+    if policy == "triangle2":
         range = ( args.max_lr - args.base_lr ) / pow( 2, int( cycle - 1 ) )
     else:
         range = ( args.max_lr - args.base_lr )
