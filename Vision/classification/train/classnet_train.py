@@ -1,7 +1,7 @@
 from Affine.Vision.classification.src.darknet53 import darknet
 from dataset_utils import load_imagenet_data as load_data, load_imagenet_val as load_val
 from dataset_utils import data_prefetcher
-from train_utils import parse_args, AverageMeter, ProgressMeter, Config, setup_and_launch
+from train_utils import parse_args, AverageMeter, ProgressMeter, Config, setup_and_launch, adjust_learning_rate
 
 import os, time, datetime
 import warnings
@@ -211,31 +211,10 @@ def accuracy( outputs, targets, topk=(1, ) ):
             correct_k = correct[ :k ].view( -1 ).float().sum( 0, keepdim=True )
             res.append( correct_k.mul_( 100.0 / batch_size ) )
     return res
-        
-def adjust_learning_rate( optimizer, i, args, policy="triangle" ):
-    """learning rate schedule
-    """
-    cycle = math.floor( 1 + i / ( 2 * args.stepsize ) )
-    if policy is "triangle2":
-        range = ( args.max_lr - args.base_lr ) / pow( 2, ( cycle - 1 ) )
-    else:
-        range = ( args.max_lr - args.base_lr )
-
-    x = abs( i / args.stepsize - 2 * cycle + 1 )
-    lr = args.base_lr + range * max( 0.0, ( 1.0 - x ) )
-
-    for param_group in optimizer.param_groups:
-        param_group[ 'lr' ] = lr
-    return lr
 
 def save_checkpoint( state, is_best=True, filename=None ):
     torch.save( state, filename )
 
 
 if __name__ == "__main__":
-    config = Config()
-    config.train_path = "/home/vipul/Datasets/ImageNet/train"
-    config.val_path = "/home/vipul/Datasets/ImageNet/val"
-    config.checkpoint_path = "checkpoint"
-    config.checkpoint_name = "checkpoint.pth.tar"
-    setup_and_launch( worker_fn=main_worker, config=config )
+    setup_and_launch( main_worker )
