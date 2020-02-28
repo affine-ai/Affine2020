@@ -185,6 +185,9 @@ def load_checkpoint( model, checkpoint_path ):
 def adjust_learning_rate( optimizer, i, args, policy ):
     """learning rate schedule
     """
+    if policy not in ( "triangle", "triangle2" ):
+        raise SystemExit
+     
     cycle = math.floor( 1 + i / ( 2 * args.stepsize ) )
     if policy is "triangle2":
         range = ( args.max_lr - args.base_lr ) / pow( 2, int( cycle - 1 ) )
@@ -241,5 +244,5 @@ class Config( object ):
         s = ""
         for key, value in self.__dict__.items():
             s = s + "{} = {}\n".format( key, value )
-            s = s.rstrip( "\n" )
+        s = s.rstrip( "\n" )
         return s

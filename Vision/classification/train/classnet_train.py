@@ -1,7 +1,7 @@
 from Affine.Vision.classification.src.darknet53 import darknet
 from dataset_utils import load_imagenet_data as load_data, load_imagenet_val as load_val
 from dataset_utils import data_prefetcher
-from train_utils import parse_args, AverageMeter, ProgressMeter, Config, setup_and_launch, adjust_learning_rate
+from train_utils import parse_args, AverageMeter, ProgressMeter, setup_and_launch, adjust_learning_rate
 
 import os, time, datetime
 import warnings
