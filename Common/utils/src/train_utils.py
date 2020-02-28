@@ -7,6 +7,9 @@ import warnings
 import torch
 import torch.multiprocessing as mp
 import numpy as np
+from collections import OrderedDict
+import math
+
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -69,18 +72,40 @@ def parse_args():
     return parser.parse_args()
 
 
-def parse_config( filename="train.config", config=None ):
+def parse_config( filename ):
+    config = Config()
     if not os.path.isfile( filename ):
         print( "Config file not found: {}".format( filename ) )
-    with open( filename ) as f:
-        for line in f:
-            key, _, value = line.partition( '=' )
-            key = key.strip()
-            value = value.strip()
-            setattr( config, key, value )
+        return config
+
+    lines = []
+    try:
+        with open( filename ) as f:
+            lines.extend( f )
+    except OSError:
+        print( "Could not load config file" )
+        return config
+
+    if not lines:
+        print( "Config file is empty" )
+        return config
+
+    num = 1
+    while lines:
+        line = lines.pop( 0 ).strip()
+        num += 1
+        if not line or "#" in line[ 0 ]:
+            continue
+        if line.find( "=" ) > 0:
+            args = line.split( "=" )
+            var, val = args.pop( 0 ).strip(), args.pop( 0 ).strip()
+            setattr( config, var, val )
+    return config
 
 
 def setup_and_launch( worker_fn=None, config=None ):
+    """Pre-process args and launch the entry function into training
+    """
     args = parse_args()
 
     gpus_per_node = torch.cuda.device_count()
@@ -91,8 +116,15 @@ def setup_and_launch( worker_fn=None, config=None ):
     torch.manual_seed( 42 )
     torch.cuda.manual_seed( 42 )
 
-    config.checkpoint_write = os.path.join( config.checkpoint_path, config.checkpoint_name )
+    if config is None:
+        config = parse_config( args.config )
 
+    # print the provided config
+    print( "==========Config provided==========" )
+    print( config )
+    print( "===================================\n" )
+
+    config.checkpoint_write = os.path.join( config.checkpoint_path, config.checkpoint_name )
     if args.resume_from:
         args.resume = True
         config.checkpoint_file = os.path.join( config.checkpoint_path, args.resume_from )
@@ -105,22 +137,66 @@ def setup_and_launch( worker_fn=None, config=None ):
             exit()
         else:
             print( "\n***You have chosen to resume from a checkpoint\n***\n" )
+    
+    distributed = args.gpu is None
 
-    # print the provided config
-    print( "==========Config provided==========" )
-    config.dump()
-    print( "===================================\n" )
-
-    if args.gpu is not None:
-        args.world_size = 1
-        warnings.warn( "You have chosen to train on a specific GPU")
-        worker_fn( args.gpu, args, config )
-    else:
+    if distributed:
         args.world_size = args.nnodes * args.gpus_per_node
         args.batch_size = int( args.batch_size / args.world_size )
         args.workers = int( ( args.workers + args.gpus_per_node - 1 ) / args.gpus_per_node )
         mp.spawn( worker_fn, nprocs=args.world_size, args=( args, config ) )
+    else:
+        args.world_size = 1
+        warnings.warn( "You have chosen to train on a specific GPU")
+        worker_fn( args.gpu, args, config )
+
     print( "All Done.")
+
+
+def load_checkpoint( model, checkpoint_path ):
+    """Loads the model state from a checkpoint file
+    Inputs:
+        model: reference to the model
+        checkpoint_path: full path to the checkpoint file
+    Returns: 
+        True if successfully loaded the checkpoint otherwise False
+    """
+    if not os.path.isfile( checkpoint_path ):
+        print( "Checkpoint file not found" )
+        return False
+
+    print( "Loading checkpoint {}".format( checkpoint_path ) )
+    checkpoint = torch.load( checkpoint_path, map_location='cpu' )
+
+    state_dict = checkpoint[ "model" ]
+    attempt = 0
+    while attempt < 2:
+        try:
+            model.load_state_dict( state_dict )
+        except RuntimeError:
+            attempt += 1
+            state_dict = OrderedDict( [ ( k[ 7: ], v ) for k, v in state_dict.items() 
+                                                                if k.startswith( "module" ) ] )
+        else:
+            return True
+    return False
+
+
+def adjust_learning_rate( optimizer, i, args, policy ):
+    """learning rate schedule
+    """
+    cycle = math.floor( 1 + i / ( 2 * args.stepsize ) )
+    if policy is "triangle2":
+        range = ( args.max_lr - args.base_lr ) / pow( 2, int( cycle - 1 ) )
+    else:
+        range = ( args.max_lr - args.base_lr )
+
+    x = abs( i / args.stepsize - 2 * cycle + 1 )
+    lr = args.base_lr + range * max( 0.0, ( 1.0 - x ) )
+
+    for param_group in optimizer.param_groups:
+        param_group[ 'lr' ] = lr
+    return lr
 
 
 class AverageMeter( object ):
@@ -161,8 +237,9 @@ class ProgressMeter( object ):
         print( "\t".join( entries ) )
 
 class Config( object ):
-    def dump( self ):
+    def __str__( self ):
         s = ""
         for key, value in self.__dict__.items():
             s = s + "{} = {}\n".format( key, value )
-        print( s )
+            s = s.rstrip( "\n" )
+        return s
