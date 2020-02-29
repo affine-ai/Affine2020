@@ -23,9 +23,6 @@ out = None
 class Config( object ):
     pass 
 
-config = Config()
-
-
 class Shell( cmd.Cmd ):
     def __init__( self, config ):
         super().__init__()
@@ -58,16 +55,13 @@ class Shell( cmd.Cmd ):
     # Functions overridden from base class go here
     ##############################################
     def precmd( self, line ):
-        return line
-
-    def onecmd( self, line ):
         if line.find( " " ) > 0:
             args = line.split( " " )
             map( str.strip, args )
             c = "{}_{}".format( args.pop( 0 ), args.pop( 0 ) )
             if ( callable( getattr( self, "do_" + c, None ) ) ):
-                line = "{} {}".format( c, " ".join( args ) )
-        cmd.Cmd.onecmd( self, line )
+                line = "{} {}".format( c, " ".join( args ) )        
+        return line
 
 
     def default( self, line ):
@@ -201,7 +195,7 @@ class Shell( cmd.Cmd ):
             model.load_state_dict( state_dict )
         except RuntimeError:
             new_state_dict = OrderedDict( [ ( k[ 7: ], v ) for k, v in state_dict.items() 
-                                                                        if k.startswith( "module" ) ] )
+                                                            if k.startswith( "module" ) ] )
             model.load_state_dict( new_state_dict )
 
     do_load_chkp = do_load_checkpoint
@@ -518,11 +512,22 @@ class Shell( cmd.Cmd ):
     def do_set_class( self, args ):
         if self.dataset is None:
             self.error( "No dataset is configured" )
-        idx = int( args )
+        if args:
+            idx = int( args )
+        else:
+            idx = 0
         if not self.dataset.set_class( idx ):
             self.error( "Could not set class to {}".format( args ) )
 
+    def do_set_dataset( self, path ):
+        self.dataset = Dataset( path )
 
+    def do_dataset_suffix( self, args ):
+        if self.dataset.suffix( args ):
+            self.message( "Current dataset is: {}".format( self.dataset.data_path ) )
+        else:
+            self.error( "Could not change suffix" )
+        
     ###########################
     # Utility functions go here
     ###########################
@@ -702,6 +707,7 @@ class Shell( cmd.Cmd ):
 
 
 if __name__ == "__main__":
+    config = Config()
     shell = Shell( config )
     shell.prompt = '>> '
     shell._cmdloop( "Welcome to the shell" )

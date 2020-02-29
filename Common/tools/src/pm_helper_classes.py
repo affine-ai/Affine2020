@@ -23,6 +23,7 @@ class GraphWindow( object ):
         self.window_title = "PM Debug"
         self.cur_ax = None
         self.set_window_title()
+        self.mode( "display" )
 
     def set_window_title( self, title=None ):
         if title is None:
@@ -35,15 +36,21 @@ class GraphWindow( object ):
         for ax in self.fig.axes:
             self.fig.delaxes( ax )
 
+    def mode( self, mode ):
+        if mode == "comparison":
+            self.num_windows = 2
+        else:
+            self.num_windows = 1
+
     def current_axes( self, persist=False ):
         if persist and self.cur_ax is not None:
             return self.cur_ax
         else:
             self.reset_window()
-            self.cur_ax = self.fig.subplots( 1, 1 )
+            self.cur_ax = self.fig.subplots( 1, self.num_windows )
             return self.cur_ax
 
-    def imshow( self, image, persist=False, dontshow=False, title = None, **kwargs ):
+    def imshow( self, image, ax=None, persist=False, dontshow=False, title = None, **kwargs ):
         if isinstance( image, np.ndarray ):
             image = torch.Tensor( image )
         
@@ -63,7 +70,13 @@ class GraphWindow( object ):
             # it is a grayscale image, set the color map correctly
             kwargs[ "cmap" ] = "gray"
 
-        ax = self.current_axes( persist=persist )
+        # If we are in multiwindow mode, we must be provided with an 'ax' 
+        # Therefore, if no 'ax' was provided switch explicitly to single
+        # window mode
+        if ax is None and self.num_windows > 1:
+            self.mode( "single" )
+
+        ax = ax if ax is not None else self.current_axes( persist=persist )
         if title is not None:
             ax.set_title( title )
         ax.imshow( image, **kwargs )
@@ -83,13 +96,14 @@ class GraphWindow( object ):
 class Dataset( object ):
     def __init__( self, path ):
         self.data = None
-        self.data_path = path
-        self.cur_dir = path
+        self.data_path = Path( path )
+        self.cur_class = 0
+        self.cur_dir = self.data_path
         self.cur_image_file = None
         self.file_iter = None
-        self.set_class( 0 )
         self.image_size = 224
         self.my_transforms = [ transforms.Resize( ( self.image_size, self.image_size ) ) ]
+        self.set_class( self.cur_class )
 
     def reset_class( self ):
         self.file_iter.close()
@@ -97,15 +111,16 @@ class Dataset( object ):
         self.cur_image_file = None
 
     def set_class( self, label ):
-        listdir = os.listdir( self.data_path )
+        listdir = [ d for d in self.data_path.iterdir() if d.is_dir() ]
         listdir.sort()
         label = int( label )
         try:
             dir = listdir[ label ]
         except:
             return False
-        path = os.path.join( self.data_path, dir )
-        if os.path.isdir( path ):
+        path = self.data_path / dir
+        if path.is_dir():
+            self.cur_class = label
             self.cur_dir = path
             if self.file_iter:
                 self.reset_class()
@@ -130,7 +145,12 @@ class Dataset( object ):
         return transforms.ToTensor()( transform( image ) ).unsqueeze( 0 )
 
     def suffix( self, suffix ):
-        pass
+        if suffix in ( "train", "val", "validation" ):
+            self.data_path = self.data_path.parent / suffix
+            self.set_class( self.cur_class )
+            return True
+        else:
+            return False
 
     def add_transform( self, t, index=1 ):
         self.my_transforms.append( t )
