@@ -22,8 +22,10 @@ class GraphWindow( object ):
         self.fig = plt.figure()
         self.window_title = "PM Debug"
         self.cur_ax = None
+        self.num_windows = 1
+        self.window = None
         self.set_window_title()
-        self.mode( "display" )
+        self.mode( "single" )
 
     def set_window_title( self, title=None ):
         if title is None:
@@ -37,20 +39,38 @@ class GraphWindow( object ):
             self.fig.delaxes( ax )
 
     def mode( self, mode ):
-        if mode == "comparison":
+        prev_mode = self.num_windows
+        if mode == "dual":
             self.num_windows = 2
         else:
             self.num_windows = 1
+        if prev_mode is not self.num_windows:
+            self.cur_ax = None
+            self.window = None
 
     def current_axes( self, persist=False ):
-        if persist and self.cur_ax is not None:
-            return self.cur_ax
-        else:
+        """Return the current axis to draw on.
+        If persist flag is set, always return the current axis.
+        If persist flag is not set:
+            In 'single' window mode, clear the window before returning the axes
+            In 'dual' window mode, return the axes for the next window
+        """
+        if self.cur_ax is None:
             self.reset_window()
-            self.cur_ax = self.fig.subplots( 1, self.num_windows )
-            return self.cur_ax
+            self.fig.subplots( 1, self.num_windows )
+            self.window = 0
+            self.cur_ax = self.fig.axes[ 0 ]
+        else:
+            if not persist:
+                if self.num_windows is 1:
+                    self.cur_ax.clear()
+                elif self.window is 0:
+                    self.cur_ax = self.fig.axes[ 1 ] 
+                    self.window = 1
+        return self.cur_ax
 
-    def imshow( self, image, ax=None, persist=False, dontshow=False, title = None, **kwargs ):
+
+    def imshow( self, image, persist=False, dontshow=False, title = None, **kwargs ):
         if isinstance( image, np.ndarray ):
             image = torch.Tensor( image )
         
@@ -70,17 +90,11 @@ class GraphWindow( object ):
             # it is a grayscale image, set the color map correctly
             kwargs[ "cmap" ] = "gray"
 
-        # If we are in multiwindow mode, we must be provided with an 'ax' 
-        # Therefore, if no 'ax' was provided switch explicitly to single
-        # window mode
-        if ax is None and self.num_windows > 1:
-            self.mode( "single" )
-
-        ax = ax if ax is not None else self.current_axes( persist=persist )
+        ax = self.current_axes( persist=persist )
         if title is not None:
             ax.set_title( title )
         ax.imshow( image, **kwargs )
-        self.fig.canvas.draw()
+        ax.figure.canvas.draw()
         if not dontshow:
             self.fig.show()
         return True
