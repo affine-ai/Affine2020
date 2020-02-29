@@ -103,17 +103,23 @@ class Shell( cmd.Cmd ):
     ####################################
     # Decorators
     ####################################
-    def supports_compare( func ):
+    def supports_compare( func ):    # pylint: disable=no-self-argument
         @functools.wraps( func )
         def wrapper( self, *kargs, **kwargs ):
             if self.compare:
                 self.fig.mode( "dual" )
-
-            func( self, *kargs, **kwargs )
-
-            if self.compare:
-                func( self, self.compare )
+            
+            try:
+                if self.compare == "image":
+                    self.do_show_image( *kargs, **kwargs )
+                elif self.compare:
+                    func( self, self.compare )
+                func( self, *kargs, **kwargs )
+            except:
+                raise
+            finally:
                 self.fig.mode( "single" )
+
         return wrapper
 
 
@@ -327,7 +333,6 @@ class Shell( cmd.Cmd ):
         self.message( "Current layer is {}: {}".format( id, layer ) )
 
         layer_info.register_forward_hook()
-        self.message( "Registered forward hook" )
 
         if self.data_post_process_fn:
             self.message( "Post processing function is {}".format( self.data_post_process_fn.__name__ ) )
@@ -357,7 +362,6 @@ class Shell( cmd.Cmd ):
         id, layer = model_info.find_last_instance( layer=nn.Conv2d )
         layer_info = model_info.get_layer_info( id, layer )
         layer_info.register_forward_hook()
-        self.message( "Registered forward hook" )
 
         net = model_info.model
         out = net( image )
@@ -481,17 +485,6 @@ class Shell( cmd.Cmd ):
         self.resync_model( args )
 
 
-    def do_set_compare( self, args ):
-        if not args:
-            self.compare = None
-        elif args not in self.models:
-            self.error( "Model \"{}\" not in context".format( args ) )
-            return 
-        self.compare = args
-
-    do_set_comp = do_set_compare
-
-
     def do_set_post_process( self, args ):
         if args == "relu":
             fn = torch.nn.ReLU()
@@ -554,6 +547,18 @@ class Shell( cmd.Cmd ):
             idx = 0
         if not self.dataset.set_class( idx ):
             self.error( "Could not set class to {}".format( args ) )
+
+
+    def do_set_compare( self, args ):
+        if not args:
+            self.compare = None
+        elif args not in self.models and args != "image":
+            self.error( "Model \"{}\" not in context".format( args ) )
+            return 
+        else:
+            self.compare = args
+
+    do_set_comp = do_set_compare
 
 
     def do_set_dataset( self, path ):

@@ -17,6 +17,7 @@ from PIL import Image
 # Disable the top menubar on plots
 matplotlib.rcParams[ "toolbar" ] = "None"
 
+
 class GraphWindow( object ):
     def __init__( self ):
         self.fig = plt.figure()
@@ -65,8 +66,8 @@ class GraphWindow( object ):
                 if self.num_windows is 1:
                     self.cur_ax.clear()
                 elif self.window is 0:
-                    self.cur_ax = self.fig.axes[ 1 ] 
                     self.window = 1
+                    self.cur_ax = self.fig.axes[ 1 ] 
         return self.cur_ax
 
 
