@@ -174,8 +174,9 @@ class Dataset( object ):
         self.my_transforms.pop( index )
 
 class ModelMeta( object ):
-    def __init__( self, model ):
+    def __init__( self, model, name ):
         self.model = model
+        self.name = name
         self.cur_layer = None
         self.layers = OrderedDict()
         self.init_layer()

@@ -270,6 +270,7 @@ class Shell( cmd.Cmd ):
         net = model_info.model
         out = net( image )
         probs, idxs = F.softmax( out, dim=1 ).topk( 5, dim=1 )
+        self.message( "{}:".format( model_info.name ) )
         for idx, prob in zip( idxs[ 0 ], probs[ 0 ] ):
             self.message( "{:<10}{:4.1f}".format( idx.data, prob.data * 100 ) )
 
@@ -278,23 +279,32 @@ class Shell( cmd.Cmd ):
 
     @supports_compare
     def do_show_first_layer_weights( self, args ):
-        if args and args not in self.models:
-            self.error( "Could not find \"{}\" in context. Please set this model in context first.".format( args ) )
-            return
-        
         if not args and not self.cur_model:
             self.error( "No default model is set. Please set a model in context first." )
             return
 
-        model_info = self.models[ args ] if args else self.cur_model
-        net = model_info.model
+        w = None
+        if args and args not in self.models:
+            w = globals()[ args ] if args in globals() else None
+            if w is None or not isinstance( w, torch.Tensor ):
+                self.error( "Can not display \"{}\" - not a model in context or a tensor.".format( args ) )
+                return
 
-        conv = self.find_first_instance( net, layer=nn.Conv2d )
-        if not conv:
-            self.error( "No Conv2d layer found" )
-            return
+            if w.dim() is not 4 and w.size[ 1 ] not in ( 3, 1 ):
+                self.error( "Tensor \"{}\" is incorrect shape for display" )
+                return
 
-        w = conv.weight.detach()
+        if w is None: 
+            model_info = self.models[ args ] if args else self.cur_model
+            net = model_info.model
+
+            conv = self.find_first_instance( net, layer=nn.Conv2d )
+            if not conv:
+                self.error( "No Conv2d layer found" )
+                return
+
+            w = conv.weight.detach()
+        
         w = w.permute( 0, 2, 3, 1 )
 
         nf, _, _, nc = w.size()
@@ -339,11 +349,25 @@ class Shell( cmd.Cmd ):
 
         net = model_info.model
         out = net( image )
-        self.message( "Out: {}".format( out.argmax() ) )
+        self.message( "{} out: {}".format( model_info.name, out.argmax() ) )
         title = "{} activations".format( layer_info.id )
         self.display_layer_data( layer_info.data(), title, reduce_fn=self.data_post_process_fn )
 
     do_show_act = do_show_activations
+
+
+    def do_activations_next( self, args ):
+        global image
+        
+        if self.dataset is None:
+            self.error( "No dataset configured" )
+            return
+
+        self.dataset.next()
+        image = self.dataset.load()
+        self.do_show_activations( args=args )
+
+    do_act_next = do_activations_next
 
 
     @supports_compare
@@ -383,7 +407,7 @@ class Shell( cmd.Cmd ):
         cam = cam.resize( ( h, w ), Image.BICUBIC )
         cam = transforms.ToTensor()( cam )[ 0 ]
         
-        msg = "Model guess: {}".format( idx )
+        msg = "{} guess: {}".format( model_info.name, idx )
         self.message( msg )
         self.fig.imshow( img, title=msg, dontshow=True )
         self.fig.imshow( cam, persist=True, cmap=cm.jet, norm=colors.Normalize(), alpha=0.5 )
@@ -401,7 +425,6 @@ class Shell( cmd.Cmd ):
         self.dataset.next()
         image = self.dataset.load()
         self.do_show_heatmap( args=args )
-
 
     do_heat_next = do_heatmap_next
 
@@ -467,7 +490,7 @@ class Shell( cmd.Cmd ):
         if model_name in self.models:
             self.cur_model = self.models[ model_name ]
         else:
-            self.cur_model = ModelMeta( model )
+            self.cur_model = ModelMeta( model, model_name )
             self.models[ model_name ] = self.cur_model
         self.message( "Context now is-> {}".format( model_name ) )
         self.fig.set_window_title( model_name )
@@ -538,6 +561,19 @@ class Shell( cmd.Cmd ):
         self.message( "Current layer is {}: {}".format( id, layer ) )
 
 
+    def do_assign_layer( self, args ):
+        var = args if args else "layer"
+        if not args:
+            if var in globals():
+                self.error( "Default \"layer\" variable already used")
+                self.error( "Please provide a variable name to assign to" )
+                return
+        if not self.cur_model:
+            self.error( "Please set a model in context first")
+            return
+        globals()[ var ] = self.cur_model.cur_layer.layer
+
+
     def do_set_class( self, args ):
         if self.dataset is None:
             self.error( "No dataset is configured" )
@@ -585,21 +621,21 @@ class Shell( cmd.Cmd ):
 
 
     def resync_model( self, name ):
-        set_cur_model = False
+        set_as_cur_model = False
 
         cur_model_in_context = self.models[ name ]
 
         if self.cur_model is cur_model_in_context:
             self.cur_model = None
-            set_cur_model = True
+            set_as_cur_model = True
 
         del self.models[ name ]
         
         new_model = self.load_from_global( name )
         if new_model is not None and isinstance( new_model, nn.Module ):
-            new_model_info = ModelMeta( new_model )
+            new_model_info = ModelMeta( new_model, name )
             self.models[ name ] = new_model_info
-            if set_cur_model:
+            if set_as_cur_model:
                 self.cur_model = new_model_info
 
 
