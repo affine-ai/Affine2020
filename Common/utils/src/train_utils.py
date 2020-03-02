@@ -201,6 +201,17 @@ def adjust_learning_rate( optimizer, i, args, policy ):
         param_group[ 'lr' ] = lr
     return lr
 
+class HyperParams():
+    base_lr = 0.0001
+    max_lr = None
+    lr_policy = None
+    batch_size = 1
+ 
+    def __str__( self ):
+        s = "Hyper Parameters:\n=================\n"
+        for key, value in self.__dict__.items():
+            s = s + "{:<20s}:\t{}\n".format( key, value )
+        return s
 
 class AverageMeter( object ):
     def __init__( self, name, fmt=":f" ):
@@ -243,6 +254,6 @@ class Config( object ):
     def __str__( self ):
         s = ""
         for key, value in self.__dict__.items():
-            s = s + "{} = {}\n".format( key, value )
+            s = s + "{:<20s}:\t{}\n".format( key, value )
         s = s.rstrip( "\n" )
         return s

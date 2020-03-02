@@ -37,8 +37,8 @@ class darknet( nn.Module ):
     def __init__( self ):
         super().__init__()
 
-        self.blocks = nn.Sequential( conv_unit( 3, 32, 7 ),
-                                     conv_unit( 32, 64, 3, stride=2 ),
+        self.blocks = nn.Sequential( conv_unit( 3, 64, 7 ),
+                                     conv_unit( 64, 64, 3, stride=2 ),
                                      ResnetBasic( 64 ),
                                      conv_unit( 64, 128, 3, stride=2 ),
                                      *[ ResnetBasic( 128 ) for _ in range( 2 ) ],
@@ -47,10 +47,11 @@ class darknet( nn.Module ):
                                      conv_unit( 256, 512, 3, stride=2 ),
                                      *[ ResnetBasic( 512 ) for _ in range( 8 ) ],
                                      conv_unit( 512, 1024, 3, stride=2 ),
-                                     *[ ResnetBasic( 1024 ) for _ in range( 4 ) ]
+                                     *[ ResnetBasic( 1024 ) for _ in range( 4 ) ],
+                                     nn.AdaptiveAvgPool2d( ( 1, 1 ) )
                                      )
 
-        self.fc = nn.Linear( 7 * 7 * 1024, 1000 )
+        self.fc = nn.Linear( 1024, 1000, bias=True )
 
     def forward( self, x ):
         x = self.blocks( x )

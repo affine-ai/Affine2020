@@ -201,8 +201,13 @@ class Shell( cmd.Cmd ):
 
         If no file is specified, checkpoint_name specified in the
         config file is used"""
-        global model
+        model_info = self.cur_model
+        if model_info is None:
+            self.error( "No default model set in context." )
+            return
         
+        model = model_info.model
+
         if args:
             file = os.path.join( self.config.checkpoint_path, args )
         else:
@@ -212,7 +217,7 @@ class Shell( cmd.Cmd ):
             return
 
         chkpoint = torch.load( file, map_location="cpu" )
-        self.message( "Loading checkpoint file: {}".format( file ) )
+        self.message( "Model \"{}\", loading checkpoint: {}".format( model_info.name, file ) )
         
         state_dict = chkpoint[ "model" ]
 
@@ -224,7 +229,7 @@ class Shell( cmd.Cmd ):
             model.load_state_dict( new_state_dict )
 
     do_load_chkp = do_load_checkpoint
-
+    do_laod_chkp = do_load_checkpoint
 
     def do_show_image( self, args ):
         """Display an image array:
@@ -246,7 +251,7 @@ class Shell( cmd.Cmd ):
 
     do_show_img = do_show_image
 
-
+    @supports_compare
     def do_infer_image( self, args ):
         """Run inference on image:
         Usage: infer image [ model_name ]
@@ -282,40 +287,38 @@ class Shell( cmd.Cmd ):
         if not args and not self.cur_model:
             self.error( "No default model is set. Please set a model in context first." )
             return
-
+        
+        title = "Tensor {}".format( args )
         w = None
         if args and args not in self.models:
             w = self.in_place_eval( args )
             if w is None or not isinstance( w, torch.Tensor ):
-                self.error( "Can not display \"{}\" - not a model in context, or a tensor.".format( args ) )
+                self.error( "Can not display \"{}\". Not a model in context, or a tensor.".format( args ) )
                 return
 
             if w.dim() is not 4 and w.size[ 1 ] not in ( 3, 1 ):
                 self.error( "Tensor \"{}\" is incorrect shape for display".format( args ) )
                 return
-
+            
         if w is None: 
             model_info = self.models[ args ] if args else self.cur_model
             net = model_info.model
-
+            title = "{} first layer weights".format( model_info.name )
             conv = self.find_first_instance( net, layer=nn.Conv2d )
             if not conv:
                 self.error( "No Conv2d layer found" )
                 return
-
             w = conv.weight.detach()
         
         w = w.permute( 0, 2, 3, 1 )
-
         nf, _, _, nc = w.size()
         if nc is 1:
             # This is a grayscale image filter
             w = w.squeeze( 3 )
 
-        s = int( np.floor( np.sqrt( nf ) ) )
-        
         # if the number of filters is not a perfect square, we pad 
         # the tensor so that we can display it in a square grid
+        s = int( np.floor( np.sqrt( nf ) ) )
         if pow( s, 2 ) < nf:
             s += 1
             npad = pow( s, 2, nf )
@@ -323,7 +326,7 @@ class Shell( cmd.Cmd ):
 
         grid_w = torch.cat( tuple( torch.cat( tuple( w[ k ] for k in range( j * s, j * s + s ) ), dim=1 ) 
                                                                for j in range( s ) ), dim=0 )
-        self.fig.imshow( grid_w )
+        self.fig.imshow( grid_w, title=title )
 
     do_show_flw = do_show_first_layer_weights
 
@@ -788,9 +791,10 @@ class Shell( cmd.Cmd ):
                 break
             except KeyboardInterrupt:
                 self.message( "**Keyboard Interrupt" )
-            except ( AttributeError, TypeError ):
+            except ( AttributeError, TypeError ) as e:
                 self.error( "----------Error----------" )
-                traceback.print_exc()
+                self.error( e )
+                #traceback.print_exc()
             except RuntimeError as e:
                 self.error( e )
 

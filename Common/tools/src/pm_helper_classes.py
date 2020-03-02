@@ -71,7 +71,7 @@ class GraphWindow( object ):
         return self.cur_ax
 
 
-    def imshow( self, image, persist=False, dontshow=False, title = None, **kwargs ):
+    def imshow( self, image, persist=False, dontshow=False, title=None, **kwargs ):
         if isinstance( image, np.ndarray ):
             image = torch.Tensor( image )
         

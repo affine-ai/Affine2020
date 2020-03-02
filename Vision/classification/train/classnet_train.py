@@ -1,7 +1,9 @@
+#!/usr/bin/env python3
+
 from Affine.Vision.classification.src.darknet53 import darknet
 from dataset_utils import load_imagenet_data as load_data, load_imagenet_val as load_val
 from dataset_utils import data_prefetcher
-from train_utils import parse_args, AverageMeter, ProgressMeter, setup_and_launch, adjust_learning_rate
+from train_utils import parse_args, AverageMeter, ProgressMeter, setup_and_launch, adjust_learning_rate, HyperParams
 
 import os, time, datetime
 import warnings
@@ -23,6 +25,8 @@ except:
     APEX_AVAILABLE = False
 
 HTIME = lambda t: time.strftime( "%H:%M:%S", time.gmtime( t ) )
+
+hyper = HyperParams()
 
 def main_worker( gpu, args, config ):
     torch.backends.cudnn.benchmark = True
@@ -73,26 +77,30 @@ def main_worker( gpu, args, config ):
         model = apex.parallel.DistributedDataParallel( model )
 
     if args.resume:
-        print( "Loading checkpoint {}".format( config.checkpoint_file ) )
         checkpoint = torch.load( config.checkpoint_file, map_location='cpu' )
         best_acc1 = checkpoint[ 'best_acc1' ]
         model.load_state_dict( checkpoint[ "model" ] )
         optimizer.load_state_dict( checkpoint[ "optimizer" ] )
         amp.load_state_dict( checkpoint[ "amp" ] )
+        start_epoch = checkpoint[ "epoch" ]
+        print( "Resuming from epoch {}, {}".format( start_epoch + 1, config.checkpoint_file ) )
         del checkpoint
+    else:
+        start_epoch = args.start_epoch - 1
+
+    hyper.base_lr = args.base_lr
+    hyper.max_lr = args.max_lr
+    hyper.lr_policy = args.lr_policy
+    hyper.batch_size = args.batch_size
 
     if args.evaluate:
         train_or_eval( False, gpu, val_loader, model, criterion, None, args, 0 )
         return
 
-
-    start_epoch = args.start_epoch - 1
     end_epoch = start_epoch + args.epochs
-
     for epoch in range( start_epoch, end_epoch ):
         if distributed:
             train_loader.sampler.set_epoch( epoch )
-        
         train_or_eval( True, gpu, train_loader, model, criterion, optimizer, args, epoch )
 
         if gpu % args.gpus_per_node == 0 or not distributed:
@@ -101,13 +109,17 @@ def main_worker( gpu, args, config ):
             is_best = acc1 > best_acc1
             best_acc1 = max( acc1, best_acc1 )
 
-            print( "Saving checkpoint")
+            print( "Saving model state" )
             save_checkpoint( { "epoch"      : epoch + 1,
+                               "base_lr"    : args.base_lr,
+                               "max_lr"     : args.max_lr,
+                               "lr_policy"  : args.lr_policy,
+                               "batch_size" : args.batch_size,
                                "model"      : model.state_dict(),
                                "optimizer"  : optimizer.state_dict(),
                                "amp"        : amp.state_dict(),
                                "best_acc1"  : best_acc1,
-                            }, is_best, filename=config.checkpoint_write )
+                             }, is_best, filename=config.checkpoint_write )
     if args.writer:
         args.writer.close()
 
@@ -139,7 +151,7 @@ def train_or_eval( train, gpu, loader, model, criterion, optimizer, args, epoch 
     with torch.set_grad_enabled( mode=train ):
         for i, ( images, target ) in enumerate( prefetcher ):
             t[1] = time.time()
-            n_iter = epoch * len( loader ) + i
+            niter = epoch * len( loader ) + i
 
             if args.prof: torch.cuda.nvtx.range_push( "Prof start iteration {}".format( i ) )
 
@@ -153,7 +165,7 @@ def train_or_eval( train, gpu, loader, model, criterion, optimizer, args, epoch 
             t[3] = time.time()
             
             if train:
-                lr = adjust_learning_rate( optimizer, n_iter, args, policy=args.lr_policy )
+                lr = adjust_learning_rate( optimizer, niter, args, policy=args.lr_policy )
 
                 optimizer.zero_grad()
                 
@@ -180,8 +192,8 @@ def train_or_eval( train, gpu, loader, model, criterion, optimizer, args, epoch 
                 progress.display( i )
 
             if  train and publish_stats:
-                args.writer.add_scalar( "Loss/{}".format( phase ), loss.item(), n_iter )
-                args.writer.add_scalar( "Accuracy/{}".format( phase ), acc1, n_iter )
+                args.writer.add_scalar( "Loss/{}".format( phase ), loss.item(), niter )
+                args.writer.add_scalar( "Accuracy/{}".format( phase ), acc1, niter )
                 args.writer.add_scalar( "Loss/Accuracy", acc1, lr * 10000 )
                 for x, y in zip( markers, total ):
                     print( "{:<25s}{}".format( x, HTIME( y ) ) )
@@ -190,13 +202,11 @@ def train_or_eval( train, gpu, loader, model, criterion, optimizer, args, epoch 
             t[0] = time.time()
             if args.prof: torch.cuda.nvtx.range_pop()
             if args.prof and i == 20:
+                print( "Profiling stopped" )
+                torch.cuda.cudart().cudaProfilerStop()
                 break
 
     print( "Total {} epoch time: {}".format( phase, HTIME( time.time() - t_init ) ) )
-    if args.prof:
-        print( "Profiling stopped" )
-        torch.cuda.cudart().cudaProfilerStop()
-
     return top1.avg
 
 def accuracy( outputs, targets, topk=(1, ) ):

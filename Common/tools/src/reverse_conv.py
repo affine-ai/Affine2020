@@ -1,16 +1,23 @@
 import torch
 import torch.nn as nn
-from torchvision.models import resnet50
+from torchvision.models import *
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import cv2
+import os
+from collections import OrderedDict
+
+from Affine.Vision.classification.src.darknet53 import darknet
+from train_utils import load_checkpoint
 
 #matplotlib.rcParams[ "toolbar" ] = "None"
 
-net = resnet50( pretrained=True ).cpu().eval()
-layer = 7
-filter = 1016
+#net = resnet101( pretrained=True ).cpu().eval()
+net = darknet().cpu().eval()
+
+layer = 0
+filter = 402
 
 class SaveParams( object ):
     def __init__( self, module ):
@@ -18,21 +25,23 @@ class SaveParams( object ):
 
     def hook_fn( self, module, input, output ):
         self.params = output.clone()
-        #print( self.params.size() )
 
     def remove_hook( self ):
         self.hook.remove()
 
 
 class ReverseConv( object ):
-    def __init__( self, size=64 ):
+    def __init__( self, size=224 ):
         global net
         self.size = size
         self.disable_grads( net )
+        self.checkpoint_path = "/home/vipul/Affine/Vision/classification/train/checkpoint"
+        self.checkpoint_name = "checkpoint.pth.tar"
+        load_checkpoint( net, os.path.join( self.checkpoint_path, self.checkpoint_name ) )
 
     def visualize( self, layer, filter, lr=0.01 ):
-
-        module = list( net.children() )[ layer ][2].relu
+        print( "filter: {}, lr: {}".format( filter, lr ) )
+        module = list( net.children() )[ layer ][28].relu
         print( module )
         activations = SaveParams( module )        
 
@@ -46,24 +55,26 @@ class ReverseConv( object ):
 
         nplots = 1 if display_later else upscale_steps
         fig = plt.figure()
-        fig.tight_layout()
         ax = fig.subplots( 1, nplots )
 
 
         s = self.size
-        img = np.random.rand( s, s, 3 )
+        img = np.random.rand( s, s )
 
         for i in range( upscale_steps ):
-            img = img.transpose( 2, 0, 1 )
+            #img = img.transpose( 2, 0, 1 )
             img = torch.tensor( [ img ], dtype=torch.float32, requires_grad=True )
 
             optimizer = torch.optim.Adam( [ img ], lr=lr )
 
             for j in range( 1, steps + 1 ):
-                optimizer.zero_grad()
-                bn_img = nn.BatchNorm2d( 3 )( img )
+                #bn_img = nn.BatchNorm2d( 3, track_running_stats=False, momentum=0 )( img )
+                bn_img = nn.BatchNorm2d( 1, track_running_stats=False, momentum=0 )( img )
+                
                 net( bn_img )
                 loss = -activations.params[ 0, filter ].mean()
+
+                optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
 
@@ -72,7 +83,7 @@ class ReverseConv( object ):
 
             s = int( s * upscale_factor )
             img = img.detach().data.numpy()[ 0 ].transpose( 1, 2, 0 )
-            img = cv2.resize( img, ( s, s ), interpolation = cv2.INTER_CUBIC )
+            #img = cv2.resize( img, ( s, s ), interpolation = cv2.INTER_CUBIC )
             if blur:
                 img = cv2.blur( img, ( blur, blur ) )
 
@@ -80,6 +91,7 @@ class ReverseConv( object ):
                 ax[ i ].imshow( img )
         
         if display_later:
+            #img = img - np.min( img, keepdims=2 )
             ax.imshow( img )           
 
         fig.tight_layout()
@@ -99,6 +111,18 @@ class ReverseConv( object ):
             param.requires_grad = False
 
 
+def plot_grad( model ):
+    mean_grads = []
+    layers = []
+    for n, p in model.named_parameters():
+        if p.requires_grad and "bias" not in n:
+            mean = p.grad.abs().mean()
+            mean_grads.append( mean )
+            layers.append( n )
+    plt.plot( mean_grads, alpha=0.3, color='b' )
+    plt.xticks( range( 0,len( mean_grads ), 1) , layers, rotation="vertical" )
+    plt.grid( True )
+    plt.show( block=False )
+
 reverse = ReverseConv()
 reverse.visualize( layer, filter )
-

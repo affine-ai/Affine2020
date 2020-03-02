@@ -1,13 +1,15 @@
 from Affine.Vision.classification.src.darknet53 import darknet
 from dataset_utils import load_imagenet_data as load_data, load_imagenet_val as load_val
 from dataset_utils import data_prefetcher
-from train_utils import parse_args, AverageMeter, ProgressMeter, Config
+from train_utils import parse_args, AverageMeter, ProgressMeter, Config, load_checkpoint
 
 import os, time, datetime
 import warnings
 import torch
 import torch.nn as nn
 from collections import OrderedDict
+import torchvision
+
 
 HTIME = lambda t: time.strftime( "%H:%M:%S", time.gmtime( t ) )
 
@@ -20,7 +22,7 @@ def validate( loader, model, args ):
     if args.gpu is not None:
         print( "** Running on GPU{}".format( args.gpu ) )
         torch.cuda.set_device( args.gpu )
-        model.eval().cuda( args.gpu )
+        model.cuda( args.gpu )
         score = score.cuda( args.gpu )
         present = present.cuda( args.gpu )
     else:
@@ -39,7 +41,7 @@ def validate( loader, model, args ):
             t0 = time.time()
             output = model( images )
             t1 = time.time()
-            accuracy_with_score( output.detach(), targets )
+            accuracy_with_score( output, targets )
             t2 = time.time()
 
             if  i % 50 == 0:
@@ -54,13 +56,14 @@ def validate( loader, model, args ):
     score = score.float().div( present )
     score = score.mul_( 100 )
 
+    
     print( "\nBest scores" )
-    best, ids = score.topk( 5, dim=0, largest=True, sorted=True )
+    best, ids = score.topk( 10, dim=0, largest=True, sorted=True )
     for i, p in zip( ids, best ):
         print( "{:<10d}\t{:4.1f}".format( i.data, p.data ) )
 
     print( "\nWorst scores" )
-    last, ids = score.topk( 5, dim=0, largest=False, sorted=True )
+    last, ids = score.topk( 10, dim=0, largest=False, sorted=True )
     for i, p in zip( ids, last ):
         print( "{:<10d}\t{:4.1f}".format( i.data, p.data ) )
 
@@ -79,27 +82,13 @@ def accuracy_with_score( outputs, targets ):
         i, c = torch.unique( positives, return_counts=True )
         score[ i ] += c
 
-def load_checkpoint( model, checkpoint_path ):
-    print( "Loading checkpoint {}".format( checkpoint_path ) )
-
-    checkpoint = torch.load( checkpoint_path, map_location='cpu' )
-    state_dict = checkpoint[ "model" ]
-    attempt = 0
-    while attempt < 2:
-        try:
-            model.load_state_dict( state_dict )
-        except RuntimeError:
-            attempt += 1
-            state_dict = OrderedDict( [ ( k[ 7: ], v ) for k, v in state_dict.items() 
-                                                                if k.startswith( "module" ) ] )
-        else:
-            break
 
 def main():
     args = parse_args()
     loader = load_val( config.val_path, args, distributed=False )
 
-    model = darknet()
+    model = darknet().eval()
+    #model = torchvision.models.resnet101( pretrained=True ).eval()
 
     checkpoint_path = os.path.join( config.checkpoint_path, config.checkpoint_name )
     load_checkpoint( model, checkpoint_path )
