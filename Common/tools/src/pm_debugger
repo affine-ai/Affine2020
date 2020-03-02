@@ -285,13 +285,13 @@ class Shell( cmd.Cmd ):
 
         w = None
         if args and args not in self.models:
-            w = globals()[ args ] if args in globals() else None
+            w = self.in_place_eval( args )
             if w is None or not isinstance( w, torch.Tensor ):
-                self.error( "Can not display \"{}\" - not a model in context or a tensor.".format( args ) )
+                self.error( "Can not display \"{}\" - not a model in context, or a tensor.".format( args ) )
                 return
 
             if w.dim() is not 4 and w.size[ 1 ] not in ( 3, 1 ):
-                self.error( "Tensor \"{}\" is incorrect shape for display" )
+                self.error( "Tensor \"{}\" is incorrect shape for display".format( args ) )
                 return
 
         if w is None: 
@@ -565,8 +565,7 @@ class Shell( cmd.Cmd ):
         var = args if args else "layer"
         if not args:
             if var in globals():
-                self.error( "Default \"layer\" variable already used")
-                self.error( "Please provide a variable name to assign to" )
+                self.error( "Default variable \"layer\" already set. Please provide a variable name or unset \"layer\"" )
                 return
         if not self.cur_model:
             self.error( "Please set a model in context first")
@@ -668,6 +667,31 @@ class Shell( cmd.Cmd ):
             return default
 
 
+    def in_place_eval( self, args ):
+        code = compile( args, "<string>", "eval" )
+        try:
+            out = eval( code )
+        except:
+            return None
+        else:
+            return out
+
+
+    def get_info_from_context( self, args ):
+        if args and args not in self.models:
+            self.error( "Could not find model {}".format( args ) )
+            return None, None
+        
+        if not args and not self.cur_model:
+            self.error( "No default model is set. Please set a model first" )
+            return None, None
+
+        model_info = self.models[ args ] if args else self.cur_model
+        layer_info = model_info.cur_layer
+
+        return model_info, layer_info
+
+
     def top_n( self, n, ar ):
         index = np.argpartition( ar, -n )[ -n: ]
         return [ ( i, ar[ i ] ) for i in index ]
@@ -708,24 +732,9 @@ class Shell( cmd.Cmd ):
         ax.bar( index, y_data, align="center", width=1 )
         for i, v in top5:
             ax.text( i, v, "{}".format( i ) )
-        ax.set_title( "Histogram of layer {}".format( title ) )
+        ax.set_title( "Layer {}".format( title ) )
         ax.grid()
         self.fig.show_graph()
-
-
-    def get_info_from_context( self, args ):
-        if args and args not in self.models:
-            self.error( "Could not find model {}".format( args ) )
-            return None, None
-        
-        if not args and not self.cur_model:
-            self.error( "No default model is set. Please set a model first" )
-            return None, None
-
-        model_info = self.models[ args ] if args else self.cur_model
-        layer_info = model_info.cur_layer
-
-        return model_info, layer_info
 
 
     ####################################################
