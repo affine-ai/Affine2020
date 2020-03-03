@@ -18,7 +18,7 @@ class UserHyperParam( argparse.Action ):
         super().__init__( option_strings, dest, **kwargs )
 
     def __call__( self, parser, namespace, values, option_string=None ):
-        setattr( namespace, self.dest + "_user", values )
+        setattr( namespace, self.dest + "_overr", values )
         setattr( namespace, self.dest, values )
 
 def parse_args():
@@ -54,7 +54,7 @@ def parse_args():
                          help="start epoch number if different from 0" )
     parser.add_argument( "--epochs", default=1, type=int,
                          help="total number of epochs to run" )
-    parser.add_argument( "--batch-size", default=128, type=int,
+    parser.add_argument( "--batch-size", default=128, type=int, action=UserHyperParam,
                          help="batch size" )
     parser.add_argument( "--use-cpu", type=int, default=True,
                          help="set True to train on CPU")
@@ -152,7 +152,7 @@ def setup_and_launch( worker_fn=None, config=None ):
         checkpoint = torch.load( config.checkpoint_file, map_location="cpu" )
         hyper.set( checkpoint )
     # User override:
-    hyper.set( { key.strip( "_user" ) : val for key, val in args.__dict__.items() if "_user" in key } )
+    hyper.set( { key[ :-6 ] : val for key, val in args.__dict__.items() if key.endswith( "_overr" ) } )
     print( hyper )
     input( "Press enter to start training" )
 
@@ -160,13 +160,13 @@ def setup_and_launch( worker_fn=None, config=None ):
 
     if distributed:
         args.world_size = args.nnodes * args.gpus_per_node
-        args.batch_size = int( args.batch_size / args.world_size )
+        hyper.batch_size = int( hyper.batch_size / args.world_size )
         args.workers = int( ( args.workers + args.gpus_per_node - 1 ) / args.gpus_per_node )
         mp.spawn( worker_fn, nprocs=args.world_size, args=( args, config, hyper ) )
     else:
         args.world_size = 1
         warnings.warn( "You have chosen to train on a specific GPU")
-        worker_fn( args.gpu, args, config )
+        worker_fn( args.gpu, args, config, hyper )
 
     print( "All Done.")
 

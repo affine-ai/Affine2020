@@ -33,9 +33,10 @@ def main_worker( gpu, args, config, hyper ):
     
     best_acc1 = 0    
     args.writer = None
-    distributed = not args.gpu
+    start_epoch = 0
+    distributed = args.gpu is None
 
-    if args.lr_policy not in ( "triangle", "triangle2" ):
+    if hyper.lr_policy not in ( "triangle", "triangle2" ):
         print( "Unsupported learning rate policy." )
         raise SystemExit
 
@@ -48,8 +49,8 @@ def main_worker( gpu, args, config, hyper ):
     # Set the default device, any tensors created by cuda by 'default' will use this device
     torch.cuda.set_device( gpu )
 
-    train_loader = load_data( config.train_path, args, distributed )
-    val_loader = load_val( config.val_path, args, distributed )
+    train_loader = load_data( config.train_path, args, hyper, distributed )
+    val_loader = load_val( config.val_path, args, hyper, distributed )
     assert train_loader.dataset.classes == val_loader.dataset.classes
 
     model = darknet()
@@ -81,33 +82,35 @@ def main_worker( gpu, args, config, hyper ):
         start_epoch = checkpoint[ "epoch" ]
         print( "Resuming from epoch {}, {}".format( start_epoch + 1, config.checkpoint_file ) )
         del checkpoint
-    start_epoch = args.start_epoch - 1 if "start_epoch_user" in args.__dict__ else start_epoch
+    start_epoch = args.start_epoch - 1 if "start_epoch_overr" in args.__dict__ else start_epoch
 
     if args.evaluate:
         train_or_eval( False, gpu, val_loader, model, criterion, None, args, hyper, 0 )
         return
 
-    if not distributed or gpu % args.gpus_per_node == 0:
+    if not distributed or gpu == 0:
         args.writer = SummaryWriter( filename_suffix="{}".format( gpu ) )
 
     end_epoch = start_epoch + args.epochs
     for epoch in range( start_epoch, end_epoch ):
         if distributed:
             train_loader.sampler.set_epoch( epoch )
+        
         train_or_eval( True, gpu, train_loader, model, criterion, optimizer, args, hyper, epoch )
 
-        if gpu % args.gpus_per_node == 0 or not distributed:
+        if args.prof is None and ( not distributed or gpu == 0 ):
             acc1 = train_or_eval( False, gpu, val_loader, model, criterion, None, args, hyper, 0 )
 
             is_best = acc1 > best_acc1
             best_acc1 = max( acc1, best_acc1 )
 
-            print( "Saving model state" )
+            print( "Saving model state...\n" )
             save_checkpoint( { "epoch"      : epoch + 1,
                                "base_lr"    : hyper.base_lr,
                                "max_lr"     : hyper.max_lr,
+                               "stepsize"   : hyper.stepsize,
                                "lr_policy"  : hyper.lr_policy,
-                               "batch_size" : hyper.batch_size,
+                               "batch_size" : hyper.batch_size * args.world_size,
                                "model"      : model.state_dict(),
                                "optimizer"  : optimizer.state_dict(),
                                "amp"        : amp.state_dict(),
@@ -127,23 +130,15 @@ def train_or_eval( train, gpu, loader, model, criterion, optimizer, args, hyper,
     prefix = "Epoch:[{}]".format( epoch + 1 ) if train else "Test: "
     progress = ProgressMeter( len( loader ), [ losses, top1, top5 ], prefix=prefix )
 
-
-    # The timing infrastructure below is not very accurate relatively, due to asynchronous 
-    # GPU operation. However, it is very lightweight and can be left working all the time 
-    # for a relative estimation of how the training loop is performing.
-    markers = ( "Time loading data:", "Time forward:", "Time backward:" )
-    t = torch.zeros( [ len( markers ) + 1 ], dtype=float )
-    total = torch.zeros( [ len( markers ) ], dtype=float )
     
     if args.prof:
         print( "Profiling started" )
         torch.cuda.cudart().cudaProfilerStart()
 
-    t_init = t[0] = time.time()
+    t_init = time.time()
     prefetcher = data_prefetcher( loader )
     with torch.set_grad_enabled( mode=train ):
         for i, ( images, target ) in enumerate( prefetcher ):
-            t[1] = time.time()
             niter = epoch * len( loader ) + i
 
             if args.prof: torch.cuda.nvtx.range_push( "Prof start iteration {}".format( i ) )
@@ -153,9 +148,6 @@ def train_or_eval( train, gpu, loader, model, criterion, optimizer, args, hyper,
             if args.prof: torch.cuda.nvtx.range_pop()
 
             loss = criterion( output, target )
-
-            t[2] = time.time()
-            t[3] = time.time()
             
             if train:
                 lr = adjust_learning_rate( optimizer, niter, hyper )
@@ -170,16 +162,14 @@ def train_or_eval( train, gpu, loader, model, criterion, optimizer, args, hyper,
                 if args.prof: torch.cuda.nvtx.range_push( "optimizer step" )
                 optimizer.step()
                 if args.prof: torch.cuda.nvtx.range_pop()
-                t[3] = time.time()
 
-            total += t[ 1: ] - t[ :-1 ]
-
-            publish_stats = i % 100 == 0 and gpu % args.gpus_per_node == 0
+            distributed = args.gpu is None
+            publish_stats = ( not distributed or gpu == 0 ) and i % 100 == 0
             if not train or publish_stats:
                 acc1, acc5 = accuracy( output.detach(), target, topk=( 1, 5 ) )
-                losses.update( loss.item(), images.size(0) )
-                top1.update( acc1[0], images.size(0) )
-                top5.update( acc5[0], images.size(0) )
+                losses.update( loss.item(), images.size( 0 ) )
+                top1.update( acc1[ 0 ], images.size( 0 ) )
+                top5.update( acc5[ 0 ], images.size( 0 ) )
 
             if publish_stats:
                 progress.display( i )
@@ -188,16 +178,14 @@ def train_or_eval( train, gpu, loader, model, criterion, optimizer, args, hyper,
                 args.writer.add_scalar( "Loss/{}".format( phase ), loss.item(), niter )
                 args.writer.add_scalar( "Accuracy/{}".format( phase ), acc1, niter )
                 args.writer.add_scalar( "Loss/Accuracy", acc1, lr * 10000 )
-                for x, y in zip( markers, total ):
-                    print( "{:<25s}{}".format( x, HTIME( y ) ) )
-                print()
 
-            t[0] = time.time()
             if args.prof: torch.cuda.nvtx.range_pop()
             if args.prof and i == 20:
-                print( "Profiling stopped" )
-                torch.cuda.cudart().cudaProfilerStop()
                 break
+
+    if args.prof:
+        print( "Profiling stopped" )
+        torch.cuda.cudart().cudaProfilerStop()
 
     print( "Total {} epoch time: {}".format( phase, HTIME( time.time() - t_init ) ) )
     return top1.avg

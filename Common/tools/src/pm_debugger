@@ -36,6 +36,7 @@ class Shell( cmd.Cmd ):
         self.cur_model = None
         self.data_post_process_fn = None
         self.compare = None
+        self.verbose_help = True
         self.cur_frame = sys._getframe().f_back
 
         self.fig = GraphWindow()
@@ -353,7 +354,7 @@ class Shell( cmd.Cmd ):
         net = model_info.model
         out = net( image )
         self.message( "{} out: {}".format( model_info.name, out.argmax() ) )
-        title = "{} activations".format( layer_info.id )
+        title = "{} {} activations".format( model_info.name, layer_info.id )
         self.display_layer_data( layer_info.data(), title, reduce_fn=self.data_post_process_fn )
 
     do_show_act = do_show_activations
@@ -564,16 +565,32 @@ class Shell( cmd.Cmd ):
         self.message( "Current layer is {}: {}".format( id, layer ) )
 
 
-    def do_assign_layer( self, args ):
-        var = args if args else "layer"
-        if not args:
+    def do_assign( self, args ):
+        def _check_in_use( var ):
             if var in globals():
-                self.error( "Default variable \"layer\" already set. Please provide a variable name or unset \"layer\"" )
-                return
+                self.error( "Variable \"{}\" already in use.".format( var ) )
+                self.help( "please \"del {}\" first, if you want to reassign this var".format( var ) )
+                return True
+            else:
+                return False
+
         if not self.cur_model:
             self.error( "Please set a model in context first")
             return
-        globals()[ var ] = self.cur_model.cur_layer.layer
+        args = args.split()
+        if not args:
+            self.error( "No valid options provided" )
+            return
+        if args[ 0 ] == "layer":
+            var = args[ 1 ] if len( args ) > 1 else "layer"
+            if _check_in_use( var ):
+                return
+            globals()[ var ] = self.cur_model.cur_layer.layer
+        elif args[ 0 ] == "weight":
+            var = args[ 1 ] if len( args ) > 1 else "weight"
+            if _check_in_use( var ):
+                return
+            globals()[ var ] = self.cur_model.cur_layer.layer.weight.data.detach().clone()
 
 
     def do_set_class( self, args ):
@@ -735,7 +752,7 @@ class Shell( cmd.Cmd ):
         ax.bar( index, y_data, align="center", width=1 )
         for i, v in top5:
             ax.text( i, v, "{}".format( i ) )
-        ax.set_title( "Layer {}".format( title ) )
+        ax.set_title( title )
         ax.grid()
         self.fig.show_graph()
 
@@ -744,11 +761,14 @@ class Shell( cmd.Cmd ):
     # Helper functions to debugger functionality go here
     ####################################################
     def error( self, err_msg ):
-        self.stdout.write( "***{}\n".format( err_msg ) )
+        self.stdout.write( "*** {}\n".format( err_msg ) )
 
     def message( self, msg="", end="\n" ):
         self.stdout.write( msg + end )
 
+    def help( self, msg="", end="\n" ):
+        if self.verbose_help:
+            self.stdout.write( "Info: " + msg + end )
 
     def exec_rc( self ):
         if not self.rc_lines:
@@ -784,6 +804,7 @@ class Shell( cmd.Cmd ):
 
     def _cmdloop( self, intro_header ):
         while True:
+            self.message( "Welcome to the debugger!" )
             try:
                 self.allow_kbdint = True
                 self.cmdloop( intro_header )
@@ -792,10 +813,10 @@ class Shell( cmd.Cmd ):
             except KeyboardInterrupt:
                 self.message( "**Keyboard Interrupt" )
             except ( AttributeError, TypeError ) as e:
-                self.error( "----------Error----------" )
                 self.error( e )
                 #traceback.print_exc()
             except RuntimeError as e:
+                self.error( "----------Error----------" )
                 self.error( e )
 
 
@@ -803,4 +824,4 @@ if __name__ == "__main__":
     config = Config()
     shell = Shell( config )
     shell.prompt = '>> '
-    shell._cmdloop( "Welcome to the shell" )
+    shell._cmdloop( "" )

@@ -42,16 +42,16 @@ class data_prefetcher( object ):
 ###################################
 #  ImageNet
 ###################################
-def load_imagenet_data( path, args, distributed ):
+def load_imagenet_data( path, args, hyper, distributed ):
     """Training set preprocessing and loader
     """
     #normalize = transforms.Normalize( [ 0.485, 0.456, 0.406 ],
     #                                 [ 0.229, 0.224, 0.225 ] )
     normalize = transforms.Normalize( [ 0.45, 0.45, 0.45 ],
-                                     [ 0.5, 0.5, 0.5 ] )
+                                     [ 0.225, 0.225, 0.225 ] )
 
 
-    transform = transforms.Compose( [ transforms.RandomResizedCrop( 224 ),
+    transform = transforms.Compose( [ transforms.RandomResizedCrop( 224, scale=( 0.25, 1.0 ) ),
                                       transforms.RandomHorizontalFlip(),
                                       transforms.Grayscale( num_output_channels=3 ),
                                       transforms.ToTensor(),
@@ -66,14 +66,14 @@ def load_imagenet_data( path, args, distributed ):
         train_sampler = None
 
     return torch.utils.data.DataLoader( dataset, 
-                                        batch_size=args.batch_size, 
+                                        batch_size=hyper.batch_size, 
                                         shuffle=( train_sampler is None ),
                                         num_workers=args.workers,
                                         pin_memory=True,
                                         sampler=train_sampler
                                         )
 
-def load_imagenet_val( path, args, distributed ):
+def load_imagenet_val( path, args, hyper, distributed ):
     """Validation set preprocessing and loader
     """
     transform = transforms.Compose( [ transforms.Resize( 224 ),
@@ -84,7 +84,7 @@ def load_imagenet_val( path, args, distributed ):
     valset = datasets.ImageFolder( path, transform=transform )
 
     return torch.utils.data.DataLoader( valset, 
-                                        batch_size=args.batch_size, 
+                                        batch_size=hyper.batch_size, 
                                         shuffle=False, 
                                         num_workers=args.workers, 
                                         pin_memory=True
@@ -93,7 +93,7 @@ def load_imagenet_val( path, args, distributed ):
 #######################################
 # COCO
 #######################################
-def load_coco_data( config, args, distributed ):
+def load_coco_data( config, args, hyper, distributed ):
     """Training set preprocessing and loader
     """    
     transform = transforms.Compose( [ transforms.ToTensor() ] )
@@ -106,20 +106,20 @@ def load_coco_data( config, args, distributed ):
         train_sampler = None
 
     return torch.utils.data.DataLoader( dataset, 
-                                        batch_size=args.batch_size, 
+                                        batch_size=hyper.batch_size, 
                                         shuffle=( train_sampler is None ),
                                         num_workers=args.workers,
                                         pin_memory=True,
                                         sampler=train_sampler )
 
-def load_coco_val( config, args, distributed ):
+def load_coco_val( config, args, hyper, distributed ):
     """Validation set preprocessing and loader
     """
     transform = transforms.Compose( [ transforms.ToTensor() ] )
     
     valset = datasets.CocoDetection( config.val_path, annFile=config.annFile, transform=transform )
     return torch.utils.data.DataLoader( valset, 
-                                        batch_size=args.batch_size, 
+                                        batch_size=hyper.batch_size, 
                                         shuffle=False, 
                                         num_workers=args.workers, 
                                         pin_memory=True )
