@@ -26,7 +26,7 @@ def validate( loader, model, args ):
         score = score.cuda( args.gpu )
         present = present.cuda( args.gpu )
     else:
-        model.eval().cpu()
+        model.cpu()
 
     top1 = AverageMeter( "Accuracy1", ":6.2f" )
     prefix = "Epoch:[{}]".format( 1 )

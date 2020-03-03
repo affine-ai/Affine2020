@@ -1,4 +1,4 @@
-from train_utils import parse_args, adjust_learning_rate
+from train_utils import parse_args, adjust_learning_rate, HyperParams
 import matplotlib.pyplot as plt
 import torch
 from torchvision.models import resnet18
@@ -6,10 +6,10 @@ from torchvision.models import resnet18
 
 dataset_size = 1281216
 
-def plot_lr( optim, args ):
+def plot_lr( optim, args, hyper ):
     lr_hist = []
 
-    batch_size = args.batch_size
+    batch_size = hyper.batch_size
     n_per_epoch = int( dataset_size / batch_size )
     print( "number of iterations per epoch:{}".format( n_per_epoch ) )
 
@@ -19,7 +19,7 @@ def plot_lr( optim, args ):
     for epoch in range( start_epoch, end_epoch ):
         for i in range( n_per_epoch ):
             niter = epoch * n_per_epoch + i
-            lr = adjust_learning_rate( optim, niter, args, policy=args.lr_policy )
+            lr = adjust_learning_rate( optim, niter, hyper )
             lr_hist.append( lr )
 
     index = list( range( n_per_epoch * args.epochs ) )
@@ -28,5 +28,6 @@ def plot_lr( optim, args ):
 
 # create a dummy optimizer
 args = parse_args()
+hyper = HyperParams( args.__dict__ )
 optim = torch.optim.SGD( resnet18().parameters(), lr=args.base_lr )
-plot_lr( optim, args )
+plot_lr( optim, args, hyper )

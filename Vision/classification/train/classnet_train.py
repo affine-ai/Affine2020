@@ -3,7 +3,7 @@
 from Affine.Vision.classification.src.darknet53 import darknet
 from dataset_utils import load_imagenet_data as load_data, load_imagenet_val as load_val
 from dataset_utils import data_prefetcher
-from train_utils import parse_args, AverageMeter, ProgressMeter, setup_and_launch, adjust_learning_rate, HyperParams
+from train_utils import parse_args, AverageMeter, ProgressMeter, setup_and_launch, adjust_learning_rate
 
 import os, time, datetime
 import warnings
@@ -26,9 +26,8 @@ except:
 
 HTIME = lambda t: time.strftime( "%H:%M:%S", time.gmtime( t ) )
 
-hyper = HyperParams()
 
-def main_worker( gpu, args, config ):
+def main_worker( gpu, args, config, hyper ):
     torch.backends.cudnn.benchmark = True
     torch.backends.cudnn.enabled = True
     
@@ -39,9 +38,6 @@ def main_worker( gpu, args, config ):
     if args.lr_policy not in ( "triangle", "triangle2" ):
         print( "Unsupported learning rate policy." )
         raise SystemExit
-
-    if not distributed or gpu % args.gpus_per_node == 0:
-        args.writer = SummaryWriter( filename_suffix="{}".format( gpu ) )
 
     if distributed:
         dist.init_process_group( backend=args.dist_backend, 
@@ -61,9 +57,9 @@ def main_worker( gpu, args, config ):
 
     criterion = nn.CrossEntropyLoss().cuda( gpu )
     optimizer = optim.SGD( model.parameters(), 
-                           lr=args.base_lr,
-                           momentum=args.momentum,
-                           weight_decay=args.weight_decay )
+                           lr=hyper.base_lr,
+                           momentum=hyper.momentum,
+                           weight_decay=hyper.weight_decay )
 
     # Nvidia documentation states - 
     # "O2 exists mainly to support some internal use cases. Please prefer O1"
@@ -85,36 +81,33 @@ def main_worker( gpu, args, config ):
         start_epoch = checkpoint[ "epoch" ]
         print( "Resuming from epoch {}, {}".format( start_epoch + 1, config.checkpoint_file ) )
         del checkpoint
-    else:
-        start_epoch = args.start_epoch - 1
-
-    hyper.base_lr = args.base_lr
-    hyper.max_lr = args.max_lr
-    hyper.lr_policy = args.lr_policy
-    hyper.batch_size = args.batch_size
+    start_epoch = args.start_epoch - 1 if "start_epoch_user" in args.__dict__ else start_epoch
 
     if args.evaluate:
-        train_or_eval( False, gpu, val_loader, model, criterion, None, args, 0 )
+        train_or_eval( False, gpu, val_loader, model, criterion, None, args, hyper, 0 )
         return
+
+    if not distributed or gpu % args.gpus_per_node == 0:
+        args.writer = SummaryWriter( filename_suffix="{}".format( gpu ) )
 
     end_epoch = start_epoch + args.epochs
     for epoch in range( start_epoch, end_epoch ):
         if distributed:
             train_loader.sampler.set_epoch( epoch )
-        train_or_eval( True, gpu, train_loader, model, criterion, optimizer, args, epoch )
+        train_or_eval( True, gpu, train_loader, model, criterion, optimizer, args, hyper, epoch )
 
         if gpu % args.gpus_per_node == 0 or not distributed:
-            acc1 = train_or_eval( False, gpu, val_loader, model, criterion, None, args, 0 )
+            acc1 = train_or_eval( False, gpu, val_loader, model, criterion, None, args, hyper, 0 )
 
             is_best = acc1 > best_acc1
             best_acc1 = max( acc1, best_acc1 )
 
             print( "Saving model state" )
             save_checkpoint( { "epoch"      : epoch + 1,
-                               "base_lr"    : args.base_lr,
-                               "max_lr"     : args.max_lr,
-                               "lr_policy"  : args.lr_policy,
-                               "batch_size" : args.batch_size,
+                               "base_lr"    : hyper.base_lr,
+                               "max_lr"     : hyper.max_lr,
+                               "lr_policy"  : hyper.lr_policy,
+                               "batch_size" : hyper.batch_size,
                                "model"      : model.state_dict(),
                                "optimizer"  : optimizer.state_dict(),
                                "amp"        : amp.state_dict(),
@@ -124,7 +117,7 @@ def main_worker( gpu, args, config ):
         args.writer.close()
 
 
-def train_or_eval( train, gpu, loader, model, criterion, optimizer, args, epoch ):
+def train_or_eval( train, gpu, loader, model, criterion, optimizer, args, hyper, epoch ):
     phase = "train" if train else "test"
     model.train() if train else model.eval()
 
@@ -165,7 +158,7 @@ def train_or_eval( train, gpu, loader, model, criterion, optimizer, args, epoch 
             t[3] = time.time()
             
             if train:
-                lr = adjust_learning_rate( optimizer, niter, args, policy=args.lr_policy )
+                lr = adjust_learning_rate( optimizer, niter, hyper )
 
                 optimizer.zero_grad()
                 

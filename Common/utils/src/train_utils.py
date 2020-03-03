@@ -11,6 +11,16 @@ from collections import OrderedDict
 import math
 
 
+class UserHyperParam( argparse.Action ):
+    def __init__( self, option_strings, dest, nargs=None, **kwargs ):
+        if nargs is not None:
+            raise ValueError( "nargs is not allowed" )
+        super().__init__( option_strings, dest, **kwargs )
+
+    def __call__( self, parser, namespace, values, option_string=None ):
+        setattr( namespace, self.dest + "_user", values )
+        setattr( namespace, self.dest, values )
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument( "--config", type=str, default="config/train.cfg",
@@ -25,21 +35,22 @@ def parse_args():
                          help="resume from given checkpoint" )
 
     # optimizer parameters
-    parser.add_argument( "--momentum", default=0.9, type=float,
+    parser.add_argument( "--momentum", default=0.9, type=float, action=UserHyperParam,
                          help="momentum")
-    parser.add_argument( "--weight-decay", default=1e-6, type=float,
+    parser.add_argument( "--weight-decay", default=1e-6, type=float, action=UserHyperParam,
                          help="weight decay" )
-    parser.add_argument( "--base-lr", default=0.0001, type=float,
+    parser.add_argument( "--base-lr", default=0.0001, type=float, action=UserHyperParam,
                          help="min learning rate" )
-    parser.add_argument( "--max-lr", default=0.1, type=float,
+    parser.add_argument( "--max-lr", default=0.1, type=float, action=UserHyperParam,
                          help="max learning rate" )
-    parser.add_argument( "--stepsize", default=1000, type=int,
+    parser.add_argument( "--stepsize", default=1000, type=int, action=UserHyperParam,
                          help="half the number of iterations to cycle the learning rate" )
-    parser.add_argument( "--lr-policy", default="triangle", type=str,
+    parser.add_argument( "--lr-policy", default="triangle", type=str, action=UserHyperParam, 
+                                            choices=[ "triangle", "triangle2", "constant" ],
                          help="Select the learning rate adjustment policy" )    
     
     # training parameters
-    parser.add_argument( "--start-epoch", default=1, type=int,
+    parser.add_argument( "--start-epoch", default=1, type=int, action=UserHyperParam,
                          help="start epoch number if different from 0" )
     parser.add_argument( "--epochs", default=1, type=int,
                          help="total number of epochs to run" )
@@ -52,7 +63,7 @@ def parse_args():
 
     # distributed processing
     parser.add_argument( "--gpu", default=None, type=int, 
-                         help="Force training on GPU id" )
+                         help="Train in single GPU mode on given GPU" )
     parser.add_argument( "--workers", default=8, type=int,
                          help="number of data loading processes" )
     parser.add_argument( "--nnodes", default=1, type=int, 
@@ -70,7 +81,6 @@ def parse_args():
     parser.add_argument( "--prof", default=0, type=int,
                          help="enable profiling" )
     return parser.parse_args()
-
 
 def parse_config( filename ):
     config = Config()
@@ -102,7 +112,6 @@ def parse_config( filename ):
             setattr( config, var, val )
     return config
 
-
 def setup_and_launch( worker_fn=None, config=None ):
     """Pre-process args and launch the entry function into training
     """
@@ -118,11 +127,7 @@ def setup_and_launch( worker_fn=None, config=None ):
 
     if config is None:
         config = parse_config( args.config )
-
-    # print the provided config
-    print( "==========Config provided==========" )
     print( config )
-    print( "===================================\n" )
 
     config.checkpoint_write = os.path.join( config.checkpoint_path, config.checkpoint_name )
     if args.resume_from:
@@ -138,20 +143,32 @@ def setup_and_launch( worker_fn=None, config=None ):
         else:
             print( "\n***You have chosen to resume from a checkpoint\n***\n" )
     
+    # Load hyper parameters
+    # Hyper parameters are loaded in this sequence: default -> resume file -> user override
+    # Default:
+    hyper = HyperParams( args.__dict__ )
+    # Resume file:
+    if args.resume:
+        checkpoint = torch.load( config.checkpoint_file, map_location="cpu" )
+        hyper.set( checkpoint )
+    # User override:
+    hyper.set( { key.strip( "_user" ) : val for key, val in args.__dict__.items() if "_user" in key } )
+    print( hyper )
+    input( "Press enter to start training" )
+
     distributed = args.gpu is None
 
     if distributed:
         args.world_size = args.nnodes * args.gpus_per_node
         args.batch_size = int( args.batch_size / args.world_size )
         args.workers = int( ( args.workers + args.gpus_per_node - 1 ) / args.gpus_per_node )
-        mp.spawn( worker_fn, nprocs=args.world_size, args=( args, config ) )
+        mp.spawn( worker_fn, nprocs=args.world_size, args=( args, config, hyper ) )
     else:
         args.world_size = 1
         warnings.warn( "You have chosen to train on a specific GPU")
         worker_fn( args.gpu, args, config )
 
     print( "All Done.")
-
 
 def load_checkpoint( model, checkpoint_path ):
     """Loads the model state from a checkpoint file
@@ -181,32 +198,44 @@ def load_checkpoint( model, checkpoint_path ):
             return True
     return False
 
-
-def adjust_learning_rate( optimizer, i, args, policy ):
+def adjust_learning_rate( optimizer, i, hyper ):
     """learning rate schedule
     """
-    if policy not in ( "triangle", "triangle2" ):
-        raise SystemExit
-     
-    cycle = math.floor( 1 + i / ( 2 * args.stepsize ) )
-    if policy == "triangle2":
-        range = ( args.max_lr - args.base_lr ) / pow( 2, int( cycle - 1 ) )
+    cycle = math.floor( 1 + i / ( 2 * hyper.stepsize ) )
+    if hyper.lr_policy == "triangle2":
+        range = ( hyper.max_lr - hyper.base_lr ) / pow( 2, int( cycle - 1 ) )
     else:
-        range = ( args.max_lr - args.base_lr )
+        range = ( hyper.max_lr - hyper.base_lr )
 
-    x = abs( i / args.stepsize - 2 * cycle + 1 )
-    lr = args.base_lr + range * max( 0.0, ( 1.0 - x ) )
+    x = abs( i / hyper.stepsize - 2 * cycle + 1 )
+    lr = hyper.base_lr + range * max( 0.0, ( 1.0 - x ) )
 
     for param_group in optimizer.param_groups:
         param_group[ 'lr' ] = lr
     return lr
 
-class HyperParams():
-    base_lr = 0.0001
-    max_lr = None
-    lr_policy = None
-    batch_size = 1
- 
+class HyperParams( object ):
+    def __init__( self, namespace=None ):
+        self.base_lr = None
+        self.max_lr = None
+        self.lr_policy = None
+        self.stepsize = None
+        self.momentum = None
+        self.weight_decay = None
+        self.batch_size = None
+        
+        if namespace is not None:
+            self.set( namespace )
+
+    def set( self, namespace ):
+        if not isinstance( namespace, dict ):
+            raise TypeError()
+        for key in self.__dict__:
+            try:
+                setattr( self, key, namespace[ key ] )
+            except:
+                continue
+
     def __str__( self ):
         s = "Hyper Parameters:\n=================\n"
         for key, value in self.__dict__.items():
@@ -252,8 +281,7 @@ class ProgressMeter( object ):
 
 class Config( object ):
     def __str__( self ):
-        s = ""
+        s = "Config:\n=======\n"
         for key, value in self.__dict__.items():
             s = s + "{:<20s}:\t{}\n".format( key, value )
-        s = s.rstrip( "\n" )
         return s
