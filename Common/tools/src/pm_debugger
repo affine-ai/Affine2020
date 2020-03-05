@@ -19,7 +19,6 @@ from pm_helper_classes import *
 
 model = None
 image = None
-out = None
 
 class Config( object ):
     pass 
@@ -232,6 +231,7 @@ class Shell( cmd.Cmd ):
     do_load_chkp = do_load_checkpoint
     do_laod_chkp = do_load_checkpoint
 
+
     def do_show_image( self, args ):
         """Display an image array:
         Usage: show image [ image_var ]
@@ -241,9 +241,11 @@ class Shell( cmd.Cmd ):
         If no args are specified, show the image referenced by the
         global "image" variable.
         """ 
-        img = self.load_from_global( args, default="image" )
+        if not args:
+            args = "image"
+        img = self.in_place_eval( args )
         if img is None:
-            self.error( "Could not find image" )
+            self.error( "Could not display image" )
             return
 
         if not self.fig.imshow( img ):
@@ -251,6 +253,7 @@ class Shell( cmd.Cmd ):
             return
 
     do_show_img = do_show_image
+
 
     @supports_compare
     def do_infer_image( self, args ):
@@ -300,7 +303,7 @@ class Shell( cmd.Cmd ):
             if w.dim() is not 4 and w.size[ 1 ] not in ( 3, 1 ):
                 self.error( "Tensor \"{}\" is incorrect shape for display".format( args ) )
                 return
-            
+
         if w is None: 
             model_info = self.models[ args ] if args else self.cur_model
             net = model_info.model
@@ -478,7 +481,7 @@ class Shell( cmd.Cmd ):
             self.display_layer_data( data, title, reduce_fn=self.data_post_process_fn )
 
 
-    def do_set_model( self, args ):
+    def do_set_context( self, args ):
         model_name = args if args else "model"
         model = self.load_from_global( model_name )
         if model is None:
@@ -496,9 +499,11 @@ class Shell( cmd.Cmd ):
         else:
             self.cur_model = ModelMeta( model, model_name )
             self.models[ model_name ] = self.cur_model
-        self.message( "Context now is-> {}".format( model_name ) )
+        self.message( "Context now is \"{}\"".format( model_name ) )
         self.fig.set_window_title( model_name )
     
+    do_set_ctx = do_set_context
+
 
     def do_resync( self, args ):
         if not args:
@@ -566,31 +571,43 @@ class Shell( cmd.Cmd ):
 
 
     def do_assign( self, args ):
-        def _check_in_use( var ):
+        args = args.split()
+
+        def _set_name_and_check_in_use( default ):
+            var = args[ 1 ] if len( args ) > 1 else default    
             if var in globals():
                 self.error( "Variable \"{}\" already in use.".format( var ) )
                 self.help( "please \"del {}\" first, if you want to reassign this var".format( var ) )
-                return True
+                return
             else:
-                return False
+                return var
 
         if not self.cur_model:
             self.error( "Please set a model in context first")
             return
-        args = args.split()
         if not args:
             self.error( "No valid options provided" )
             return
+
         if args[ 0 ] == "layer":
-            var = args[ 1 ] if len( args ) > 1 else "layer"
-            if _check_in_use( var ):
-                return
+            var = _set_name_and_check_in_use( "layer" )
             globals()[ var ] = self.cur_model.cur_layer.layer
         elif args[ 0 ] == "weight":
-            var = args[ 1 ] if len( args ) > 1 else "weight"
-            if _check_in_use( var ):
-                return
+            var = _set_name_and_check_in_use( "weight" )
             globals()[ var ] = self.cur_model.cur_layer.layer.weight.data.detach().clone()
+        elif args[ 0 ] == "out" or args[ 0 ] == "image":
+            var = _set_name_and_check_in_use( "out" )
+            self.cur_model.cur_layer.register_forward_hook()
+            if image is None:
+                globals()[ var ] = None
+            else:
+                _ = self.cur_model.model( image )
+            if args[ 0 ] == "image":
+                globals()[ var ] = self.cur_model.cur_layer.data().squeeze( 0 )
+            else:
+                globals()[ var ] = self.cur_model.cur_layer.data()
+        else:
+            self.error( "Invalid option" )
 
 
     def do_set_class( self, args ):
