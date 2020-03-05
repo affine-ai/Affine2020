@@ -336,8 +336,9 @@ class Shell( cmd.Cmd ):
 
 
     @supports_compare
-    def do_show_activations( self, args ):
+    def do_show_activations( self, args, filter_num=None ):
         model_info, layer_info = self.get_info_from_context( args )
+
         if model_info is None:
             return
 
@@ -346,19 +347,17 @@ class Shell( cmd.Cmd ):
             self.error( "Please load an input image first" )
             return
 
-        id, layer = layer_info.id, layer_info.layer
-        self.message( "Current layer is {}: {}".format( id, layer ) )
+        if self.data_post_process_fn:
+            self.message( "Using processing function {}".format( self.data_post_process_fn.__name__ ) )
 
         layer_info.register_forward_hook()
-
-        if self.data_post_process_fn:
-            self.message( "Post processing function is {}".format( self.data_post_process_fn.__name__ ) )
-
         net = model_info.model
         out = net( image )
         self.message( "{} out: {}".format( model_info.name, out.argmax() ) )
-        title = "{} {} activations".format( model_info.name, layer_info.id )
-        self.display_layer_data( layer_info.data(), title, reduce_fn=self.data_post_process_fn )
+
+        filter_str = "" if filter_num is None else ", filter {}".format( filter_num )
+        title = "{}{} activations".format( model_info.name, layer_info.id ) + filter_str
+        self.display_layer_data( layer_info.data(), title, reduce_fn=self.data_post_process_fn, filter=filter_num )
 
     do_show_act = do_show_activations
 
@@ -375,6 +374,12 @@ class Shell( cmd.Cmd ):
         self.do_show_activations( args=args )
 
     do_act_next = do_activations_next
+
+
+    def do_filter_next( self, args ):
+        filter_num = int( args ) if args else self.cur_model.cur_layer.cur_filter
+        self.do_show_activations( "", filter_num=filter_num )
+        self.cur_model.cur_layer.filter_inc( 1 )
 
 
     @supports_compare
@@ -592,22 +597,25 @@ class Shell( cmd.Cmd ):
         if args[ 0 ] == "layer":
             var = _set_name_and_check_in_use( "layer" )
             globals()[ var ] = self.cur_model.cur_layer.layer
+
         elif args[ 0 ] == "weight":
             var = _set_name_and_check_in_use( "weight" )
             globals()[ var ] = self.cur_model.cur_layer.layer.weight.data.detach().clone()
-        elif args[ 0 ] == "out" or args[ 0 ] == "image":
+
+        elif args[ 0 ] == "out" or args[ 0 ] == "outsq":
             var = _set_name_and_check_in_use( "out" )
             self.cur_model.cur_layer.register_forward_hook()
             if image is None:
                 globals()[ var ] = None
             else:
                 _ = self.cur_model.model( image )
-            if args[ 0 ] == "image":
-                globals()[ var ] = self.cur_model.cur_layer.data().squeeze( 0 )
+            if args[ 0 ] == "outsq":
+                data = self.cur_model.cur_layer.data()
+                globals()[ var ] = data.squeeze( 0 ) if data is not None else None
             else:
                 globals()[ var ] = self.cur_model.cur_layer.data()
         else:
-            self.error( "Invalid option" )
+            self.error( "Invalid comand option \"{}\"".format( args[ 0 ] ) )
 
 
     def do_set_class( self, args ):
@@ -705,10 +713,11 @@ class Shell( cmd.Cmd ):
 
 
     def in_place_eval( self, args ):
-        code = compile( args, "<string>", "eval" )
         try:
+            code = compile( args, "<string>", "eval" )
             out = eval( code )
         except:
+            self.error( sys.exc_info[ 0 ] )
             return None
         else:
             return out
@@ -729,11 +738,6 @@ class Shell( cmd.Cmd ):
         return model_info, layer_info
 
 
-    def top_n( self, n, ar ):
-        index = np.argpartition( ar, -n )[ -n: ]
-        return [ ( i, ar[ i ] ) for i in index ]
-
-
     ## FIXBUG: the following function only works when when first dim is 1
     ## May need to be fixed later to deal with batch inputs
     def op_4d( self, data, op ):
@@ -749,29 +753,32 @@ class Shell( cmd.Cmd ):
         return self.op_4d( data, op=torch.max )
 
 
-    def display_layer_data( self, data, title, reduce_fn=None ):
+    def display_layer_data( self, data, title, reduce_fn=None, filter=None ):
         if data.size( 0 ) != 1:
             self.error( "Unsupported data dimensions" )
             return
 
-        reduce_fn = torch.mean if reduce_fn is None else reduce_fn
-        
+        reduce_fn = torch.mean if reduce_fn is None else reduce_fn        
         data = data.squeeze( 0 )
         index = np.arange( data.size( 0 ) )
         # The following statement is invariant to data of dimension ( 1 ).
         # such as a list of tensors. Along the first dimension, replace 
         # the elements with any remaining dimensions with their mean.
-        y_data = list( map( lambda x: reduce_fn( x ).float().item(), data[ : ] ) )
+        y_data = torch.tensor( list( map( lambda x: reduce_fn( x ).float().item(), data[ : ] ) ) )
         
-        top5 = self.top_n( 5, y_data )
+        val, id = y_data.topk( 5, dim=0, largest=True, sorted=True )
 
         ax = self.fig.current_axes()
-        ax.bar( index, y_data, align="center", width=1 )
-        for i, v in top5:
-            ax.text( i, v, "{}".format( i ) )
         ax.set_title( title )
-        ax.grid()
-        self.fig.show_graph()
+
+        if filter is None:
+            ax.bar( index, y_data, align="center", width=1 )
+            for i, v in zip( id, val ):
+                ax.text( i, v, "{}".format( i ) )
+            ax.grid()
+        else:
+            ax.imshow( data[ filter ] )
+        self.fig.show_graph( ax )
 
 
     ####################################################
@@ -820,8 +827,8 @@ class Shell( cmd.Cmd ):
 
 
     def _cmdloop( self, intro_header ):
+        self.message( "Welcome to the debug shell!" )
         while True:
-            self.message( "Welcome to the debugger!" )
             try:
                 self.allow_kbdint = True
                 self.cmdloop( intro_header )
@@ -829,7 +836,7 @@ class Shell( cmd.Cmd ):
                 break
             except KeyboardInterrupt:
                 self.message( "**Keyboard Interrupt" )
-            except ( AttributeError, TypeError ) as e:
+            except ( AttributeError, TypeError, NameError ) as e:
                 self.error( e )
                 #traceback.print_exc()
             except RuntimeError as e:

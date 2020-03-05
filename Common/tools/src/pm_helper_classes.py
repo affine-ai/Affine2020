@@ -100,8 +100,10 @@ class GraphWindow( object ):
             self.fig.show()
         return True
 
-    def show_graph( self ):
-        self.fig.canvas.draw()
+    def show_graph( self, ax=None, aspect="auto" ):
+        ax = self.cur_ax if ax is None else ax
+        ax.set_aspect( aspect )
+        ax.figure.canvas.draw()
         self.fig.show()
 
     def close( self ):
@@ -297,10 +299,20 @@ class ModelMeta( object ):
 
 class LayerMeta( object ):
     def __init__( self, layer, id=[] ):
-        self.out = None
-        self.post_process_fn = None
         self.layer = layer
         self.id = id
+        self.out = None
+        self.post_process_fn = None
+        self.cur_filter = None
+        self.num_filters = None
+        self.init_num_filters()
+
+    def init_num_filters( self ):
+        try:
+            self.num_filters = self.layer.weight.size()[ 0 ]
+            self.cur_filter = 0
+        except:
+            self.num_filters = None
 
     def register_forward_hook( self, hook_fn=None ):
         if hook_fn is None:
@@ -343,6 +355,15 @@ class LayerMeta( object ):
         if self.post_process_fn:
             return True
         return False
+
+    def filter_inc( self, n ):
+        if self.cur_filter is None:
+            return
+        self.cur_filter += n
+        if self.cur_filter >= self.num_filters:
+            self.cur_filter = 0
+        if self.cur_filter < 0:
+            self.cur_filter = 0
 
     def close( self ):
         self.fhook.remove()
