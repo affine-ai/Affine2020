@@ -24,9 +24,10 @@ class GraphWindow( object ):
         self.window_title = "PM Debug"
         self.cur_ax = None
         self.num_windows = 1
-        self.window = None
+        self.cur_window = None
+        self.mode = None
         self.set_window_title()
-        self.mode( "single" )
+        self.set_mode( "single" )
 
     def set_window_title( self, title=None ):
         if title is None:
@@ -39,7 +40,7 @@ class GraphWindow( object ):
         for ax in self.fig.axes:
             self.fig.delaxes( ax )
 
-    def mode( self, mode ):
+    def set_mode( self, mode ):
         prev_mode = self.num_windows
         if mode == "dual":
             self.num_windows = 2
@@ -47,7 +48,7 @@ class GraphWindow( object ):
             self.num_windows = 1
         if prev_mode is not self.num_windows:
             self.cur_ax = None
-            self.window = None
+            self.cur_window = None
 
     def current_axes( self, persist=False ):
         """Return the current axis to draw on.
@@ -59,17 +60,23 @@ class GraphWindow( object ):
         if self.cur_ax is None:
             self.reset_window()
             self.fig.subplots( 1, self.num_windows )
-            self.window = 0
+            self.cur_window = 0
             self.cur_ax = self.fig.axes[ 0 ]
         else:
             if not persist:
                 if self.num_windows is 1:
                     self.cur_ax.clear()
-                elif self.window is 0:
-                    self.window = 1
-                    self.cur_ax = self.fig.axes[ 1 ] 
+                else:
+                    self.cur_window = self.cur_window ^ 1
+                    self.cur_ax = self.fig.axes[ self.cur_window ]
         return self.cur_ax
 
+    def window( self, num ):
+        if not isinstance( num, int ):
+            return False
+        if num > self.num_windows:
+            return False
+        return self.fig.axes[ num ]
 
     def imshow( self, image, persist=False, dontshow=False, title=None, **kwargs ):
         if isinstance( image, np.ndarray ):

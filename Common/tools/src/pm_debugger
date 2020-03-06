@@ -36,8 +36,8 @@ class Shell( cmd.Cmd ):
         self.data_post_process_fn = None
         self.compare = None
         self.verbose_help = True
+        self.stack = []
         self.cur_frame = sys._getframe().f_back
-
         self.fig = GraphWindow()
 
         try:
@@ -104,21 +104,35 @@ class Shell( cmd.Cmd ):
     # Decorators
     ####################################
     def supports_compare( func ):    # pylint: disable=no-self-argument
+        """We store self.compare on the stack to make the decorator reentrant
+        This avoids recursion in case a function that supports this decorator
+        is called again inside the decorator
+        """
+
         @functools.wraps( func )
         def wrapper( self, *kargs, **kwargs ):
-            if self.compare:
-                self.fig.mode( "dual" )
-            
+            compare = self.compare
+            self.stack.append( self.compare )
+            self.compare = None
+
+            if compare:
+                self.fig.set_mode( "dual" )
+    
             try:
-                if self.compare == "image":
+                if compare == "image":
                     self.do_show_image( *kargs, **kwargs )
-                elif self.compare:
-                    func( self, self.compare )
-                func( self, *kargs, **kwargs )
+                elif compare == "flw":
+                    self.do_show_first_layer_weights( *kargs )
+                elif compare is not None:
+                    func( self, compare )       # pylint: disable=not-callable
+
+                func( self, *kargs, **kwargs )  # pylint: disable=not-callable
             except:
                 raise
             finally:
-                self.fig.mode( "single" )
+                self.compare = self.stack.pop()
+                if compare:
+                    self.fig.set_mode( "single" )
 
         return wrapper
 
@@ -314,11 +328,7 @@ class Shell( cmd.Cmd ):
                 return
             w = conv.weight.detach()
         
-        w = w.permute( 0, 2, 3, 1 )
-        nf, _, _, nc = w.size()
-        if nc is 1:
-            # This is a grayscale image filter
-            w = w.squeeze( 3 )
+        nf = w.size( 0 )
 
         # if the number of filters is not a perfect square, we pad 
         # the tensor so that we can display it in a square grid
@@ -326,17 +336,15 @@ class Shell( cmd.Cmd ):
         if pow( s, 2 ) < nf:
             s += 1
             npad = pow( s, 2, nf )
-            w = torch.cat( ( w, torch.ones( ( npad, *w.size()[ 1: ] ) ) ), dim=0 )
-
-        grid_w = torch.cat( tuple( torch.cat( tuple( w[ k ] for k in range( j * s, j * s + s ) ), dim=1 ) 
-                                                               for j in range( s ) ), dim=0 )
+            w = torch.cat( ( w, torch.ones( ( npad, *w.size()[ 1: ] ) ) ), dim=0 ) # pylint: disable=no-member
+        grid_w = torchvision.utils.make_grid( w, nrow=s, padding=1 )
         self.fig.imshow( grid_w, title=title )
 
     do_show_flw = do_show_first_layer_weights
 
 
     @supports_compare
-    def do_show_activations( self, args, filter_num=None ):
+    def do_show_activations( self, args, fnum=None ):
         model_info, layer_info = self.get_info_from_context( args )
 
         if model_info is None:
@@ -355,9 +363,9 @@ class Shell( cmd.Cmd ):
         out = net( image )
         self.message( "{} out: {}".format( model_info.name, out.argmax() ) )
 
-        filter_str = "" if filter_num is None else ", filter {}".format( filter_num )
+        filter_str = "" if fnum is None else ", filter {}".format( fnum )
         title = "{}{} activations".format( model_info.name, layer_info.id ) + filter_str
-        self.display_layer_data( layer_info.data(), title, reduce_fn=self.data_post_process_fn, filter=filter_num )
+        self.display_layer_data( layer_info.data(), title, reduce_fn=self.data_post_process_fn, filter=fnum )
 
     do_show_act = do_show_activations
 
@@ -376,10 +384,26 @@ class Shell( cmd.Cmd ):
     do_act_next = do_activations_next
 
 
-    def do_filter_next( self, args ):
+    def do_visual_layer_activations( self, args ):
+        row = 0
+        col = 0
+        def _keypress( event ):
+            nonlocal row
+            nonlocal col
+            if event.key == "left":
+                col = col - 1 if col > 0 else col
+            if event.key == "right":
+                col = col + 1 if col < 8 else col
+            if event.key == "up":
+                row = row - 1 if row > 0 else row
+            if event.key == "down":
+                row = row + 1 if row < 8 else row
+
         filter_num = int( args ) if args else self.cur_model.cur_layer.cur_filter
-        self.do_show_activations( "", filter_num=filter_num )
-        self.cur_model.cur_layer.filter_inc( 1 )
+        self.fig.set_window_title( "dual" )
+        self.do_show_first_layer_weights( "" )
+        filter_num = row * 8 + col
+        self.do_show_activations( "", fnum=filter_num )
 
 
     @supports_compare
@@ -526,9 +550,9 @@ class Shell( cmd.Cmd ):
         if args == "relu":
             fn = torch.nn.ReLU()
         elif args == "mean":
-            fn = torch.mean
+            fn = torch.mean     # pylint: disable=no-member
         elif args == "max":
-            fn = torch.max
+            fn = torch.max      # pylint: disable=no-member
         elif args == "none" or args == "None":
             fn = None
         else:
@@ -632,7 +656,7 @@ class Shell( cmd.Cmd ):
     def do_set_compare( self, args ):
         if not args:
             self.compare = None
-        elif args not in self.models and args != "image":
+        elif args not in self.models and args not in ( "image", "flw" ):
             self.error( "Model \"{}\" not in context".format( args ) )
             return 
         else:
@@ -776,9 +800,9 @@ class Shell( cmd.Cmd ):
             for i, v in zip( id, val ):
                 ax.text( i, v, "{}".format( i ) )
             ax.grid()
+            self.fig.show_graph( ax )
         else:
-            ax.imshow( data[ filter ] )
-        self.fig.show_graph( ax )
+            self.fig.imshow( data[ filter ] )
 
 
     ####################################################
