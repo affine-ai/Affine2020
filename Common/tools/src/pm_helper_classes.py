@@ -1,8 +1,12 @@
 import os, sys
 from pathlib import Path
 from collections import OrderedDict
+
+import logging
+logging.getLogger( "matplotlib" ).setLevel( logging.ERROR )
 import matplotlib
 import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 from matplotlib import cm, colors
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 unused import
 import numpy as np
@@ -28,6 +32,7 @@ class GraphWindow( object ):
         self.mode = None
         self.set_window_title()
         self.set_mode( "single" )
+        self.fig.canvas.mpl_connect( "close_event", self.handle_window_close )
 
     def set_window_title( self, title=None ):
         if title is None:
@@ -78,7 +83,18 @@ class GraphWindow( object ):
             return False
         return self.fig.axes[ num ]
 
-    def imshow( self, image, persist=False, dontshow=False, title=None, **kwargs ):
+    def handle_window_close( self, event ):
+        self.fig.canvas.stop_event_loop()
+
+    def on_event( self, type, func ):
+        cid = self.fig.canvas.mpl_connect( type, func )
+        self.fig.canvas.start_event_loop()
+        self.fig.canvas.mpl_disconnect( cid )
+
+    def stop_event_loop( self ):
+        self.fig.canvas.stop_event_loop()
+
+    def imshow( self, image, persist=False, dontshow=False, title=None, rect=None, **kwargs ):
         if isinstance( image, np.ndarray ):
             image = torch.Tensor( image )
         
@@ -101,6 +117,11 @@ class GraphWindow( object ):
         ax = self.current_axes( persist=persist )
         if title is not None:
             ax.set_title( title )
+        if rect is not None:
+            origin, w, h = rect
+            rect = patches.Rectangle( origin, w, h, linewidth=1, edgecolor='r', facecolor="none" )
+            ax.add_patch( rect )
+        image = ( image * 255 ).int()
         ax.imshow( image, **kwargs )
         ax.figure.canvas.draw()
         if not dontshow:
@@ -310,7 +331,7 @@ class LayerMeta( object ):
         self.id = id
         self.out = None
         self.post_process_fn = None
-        self.cur_filter = None
+        self.cur_filter = 0
         self.num_filters = None
         self.init_num_filters()
 
@@ -364,7 +385,7 @@ class LayerMeta( object ):
         return False
 
     def filter_inc( self, n ):
-        if self.cur_filter is None:
+        if self.cur_filter is None or self.num_filters is None:
             return
         self.cur_filter += n
         if self.cur_filter >= self.num_filters:
