@@ -320,9 +320,8 @@ class Shell( cmd.Cmd ):
 
         if weight is None: 
             model_info = self.models[ args ] if args else self.cur_model
-            net = model_info.model
             title = "{} first layer weights".format( model_info.name )
-            conv = self.find_first_instance( net, layer=nn.Conv2d )
+            _, conv = model_info.find_instance( type=nn.Conv2d )
             if not conv:
                 self.error( "No Conv2d layer found" )
                 return
@@ -353,7 +352,7 @@ class Shell( cmd.Cmd ):
     def do_visual_weights( self, args ):
         def _render( fnum ):
             self.do_show_first_layer_weights( "", fnum=fnum, zoom=False )
-            self.do_show_first_layer_weights( "", fnum=fnum, zoom=True )
+            self.do_show_activations( "", fnum=fnum )
 
         def _keypress( event ):
             nonlocal row
@@ -372,6 +371,11 @@ class Shell( cmd.Cmd ):
             fnum = row * 8 + col
             _render( fnum )
         
+        if self.cur_model is None:
+            self.error( "No current model set in context" )
+            return
+
+        self.cur_model.set_first_layer()
         fnum = 0
         row = col = 0
         self.fig.set_mode( "dual" )        
@@ -703,16 +707,6 @@ class Shell( cmd.Cmd ):
     ###########################
     # Utility functions go here
     ###########################
-    def find_first_instance( self, net, layer=nn.Conv2d ):
-        for l in net.children():
-            if isinstance( l, nn.Conv2d ):
-                return l
-            ret = self.find_first_instance( l, layer=layer )
-            if isinstance( ret, layer ):
-                return ret
-        return None
-
-
     def resync_model( self, name ):
         set_as_cur_model = False
 

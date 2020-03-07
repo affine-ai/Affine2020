@@ -238,7 +238,7 @@ class ModelMeta( object ):
 
     def traverse_updown( self, dir ):
         id = self.cur_layer.id
-        new_id, new_layer = self.find_instance_by_id( id, dir=dir )
+        new_id, new_layer = self.find_instance( key=id, dir=dir )
         
         if not new_id:
             return False
@@ -248,7 +248,14 @@ class ModelMeta( object ):
         self.cur_layer = self.get_layer_info( id, layer )
         return True
 
-    def find_instance_by_id( self, key, dir, net=None ):
+    def set_first_layer( self ):
+        id, layer = self.find_instance( type=nn.Conv2d )
+        if not id:
+            return False
+        self.cur_layer = self.get_layer_info( id, layer )
+        return True
+
+    def find_instance( self, key=None, dir=0, type=None, net=None ):
         """This function implements a depth first search that terminates 
         as soon as a sufficient condition is met
         """
@@ -281,8 +288,11 @@ class ModelMeta( object ):
                         terminate_next = True
                         frame = []
                     elif dir == 0:
-                        terminate == True
+                        terminate = True
                         frame, leaf = cur_frame.copy(), m
+                elif type is not None and isinstance( m, type ):
+                    terminate = True
+                    frame, leaf = cur_frame.copy(), m
                 else:
                     # We don't have a key match, treat it like a normal iteration
                     # If this is a leaf node, save it's location else recurse further
