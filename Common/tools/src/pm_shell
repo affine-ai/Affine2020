@@ -369,7 +369,7 @@ class Shell( ShellBase, cmd.Cmd ):
         self.cur_model.cur_layer.register_forward_hook()
         _ = self.cur_model.model( image )
         _data = self.cur_model.cur_layer.data().squeeze( 0 )
-        _weights = self.cur_model.cur_layer.layer.weight
+        _weights = self.cur_model.cur_layer.layer.weight.detach().clone()
 
         fnum = 0
         row = col = 0
@@ -462,8 +462,11 @@ class Shell( ShellBase, cmd.Cmd ):
         
         msg = "{} guess: {}".format( model_info.name, idx )
         self.message( msg )
-        self.fig.imshow( img, title=msg, dontshow=True )
-        self.fig.imshow( cam, persist=True, cmap="jet", alpha=0.5 )
+        window = self.fig.current_axes()
+        window.add_title( msg )
+        window.add_image( img )
+        window.add_image( cam, cmap="jet", alpha=0.5 )
+        window.show()
 
     do_show_heat = do_show_heatmap
 
@@ -735,12 +738,9 @@ class Shell( ShellBase, cmd.Cmd ):
                 self.message( "\n**Keyboard Interrupt" )
             except ( AttributeError, TypeError, NameError ) as e:
                 self.error( e )
-                #traceback.print_exc()
-            except RuntimeError as e:
-                self.error( "----------Error----------" )
-                self.error( e )
                 traceback.print_exc()
-
+            except ( RuntimeError, IndexError ):
+                traceback.print_exc()
 
 if __name__ == "__main__":
     config = Config()

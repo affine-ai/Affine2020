@@ -21,12 +21,64 @@ from PIL import Image
 # Disable the top menubar on plots
 matplotlib.rcParams[ "toolbar" ] = "None"
 
+class Window( object ):
+    def __init__( self, ax ):
+        self.ax = ax
+        self.cursor = None
+        self.background = None
+        self.artists = []
+        self.ax.figure.canvas.draw()
+        self.ax.figure.show()
+
+    def set_cursor( self, rect ):
+        if rect is not None:
+            origin, w, h = rect
+            cursor = patches.Rectangle( origin, w, h, linewidth=1, edgecolor='r', facecolor="none" )
+            if self.cursor is not None:
+                self.cursor.remove()
+            self.cursor = cursor
+            self.ax.add_patch( self.cursor )
+
+    def add_title( self, t ):
+        self.ax.set_title( t )
+
+    def add_image( self, image, **kwargs ):
+        if isinstance( image, np.ndarray ):
+            image = torch.Tensor( image )
+        if not isinstance( image, torch.Tensor ):
+            return False
+
+        if image.dim() == 4 and image.size( 0 ) == 1:
+            # extract image
+            image = image.squeeze( 0 )
+        if image.dim() is 3 and image.size()[ -1 ] is not 3:
+            # image in ( C x H x W ) format
+            image = image.permute( 1, 2, 0 )
+            # remove the extra dimension if it is a grayscale image
+            image = image.squeeze( 2 )
+        if image.dim() is 2 and "cmap" not in kwargs:
+            # it is a grayscale image, set the color map correctly
+            kwargs[ "cmap" ] = "gray"
+        self.artists.append( self.ax.imshow( image, **kwargs ) )
+
+    def show( self ):
+        for a in self.artists:
+            print( a )
+            self.ax.draw_artist( a )
+        if self.cursor:
+            self.ax.draw_artist( self.cursor )
+        self.ax.figure.canvas.blit( self.ax.bbox )
+
+    def clear( self ):
+        self.ax.clear()
+
 class GraphWindow( object ):
     def __init__( self ):
         self.fig = plt.figure()
         self.window_title = "PM Debug"
         self.cur_ax = None
         self.num_windows = 1
+        self.windows = []
         self.cur_window = None
         self.mode = None
         self.set_window_title()
@@ -40,9 +92,11 @@ class GraphWindow( object ):
             t = "{} ( {} )".format( self.window_title, title )
         self.fig.canvas.set_window_title( t )
 
-    def reset_window( self ):
-        for ax in self.fig.axes:
-            self.fig.delaxes( ax )
+    def reset_windows( self ):
+        for window in self.windows:
+            self.fig.delaxes( window.ax )
+            del window
+        self.windows = []
 
     def set_mode( self, mode ):
         prev_mode = self.num_windows
@@ -54,6 +108,13 @@ class GraphWindow( object ):
             self.cur_ax = None
             self.cur_window = None
 
+    def init_windows( self ):
+        self.fig.subplots( 1, self.num_windows )
+        for i in range( self.num_windows ):
+            window = Window( self.fig.axes[ i ] )
+            self.windows.append( window )
+        self.cur_window = 0
+
     def current_axes( self, persist=False ):
         """Return the current axis to draw on.
         If persist flag is set, always return the current axis.
@@ -61,26 +122,19 @@ class GraphWindow( object ):
             In 'single' window mode, clear the window before returning the axes
             In 'dual' window mode, return the axes for the next window
         """
-        if self.cur_ax is None:
-            self.reset_window()
-            self.fig.subplots( 1, self.num_windows )
-            self.cur_window = 0
-            self.cur_ax = self.fig.axes[ 0 ]
+        if self.cur_window is None:
+            self.reset_windows()
+            self.init_windows()
         else:
             if not persist:
                 if self.num_windows is 1:
-                    self.cur_ax.clear()
+                    self.window( self.cur_window ).clear()
                 else:
                     self.cur_window = self.cur_window ^ 1
-                    self.cur_ax = self.fig.axes[ self.cur_window ]
-        return self.cur_ax
+        return self.window( self.cur_window )
 
     def window( self, num ):
-        if not isinstance( num, int ):
-            return False
-        if num > self.num_windows:
-            return False
-        return self.fig.axes[ num ]
+        return self.windows[ num ]
 
     def on_window_close( self, event ):
         self.fig.canvas.stop_event_loop()
@@ -93,38 +147,12 @@ class GraphWindow( object ):
     def stop_event_loop( self ):
         self.fig.canvas.stop_event_loop()
 
-    def imshow( self, image, persist=False, dontshow=False, title=None, rect=None, **kwargs ):
-        if isinstance( image, np.ndarray ):
-            image = torch.Tensor( image )
-        
-        if isinstance( image, torch.Tensor ):
-            if image.dim() == 4 and image.size( 0 ) == 1:
-                # extract image
-                image = image.squeeze( 0 )
-            if image.dim() is 3 and image.size()[ -1 ] is not 3:
-                # image in ( C x H x W ) format
-                image = image.permute( 1, 2, 0 )
-                # remove the extra dimension if it is a grayscale image
-                image = image.squeeze( 2 )
-        else:
-            return False
-
-        if image.dim() is 2 and "cmap" not in kwargs:
-            # it is a grayscale image, set the color map correctly
-            kwargs[ "cmap" ] = "gray"
-
-        ax = self.current_axes( persist=persist )
+    def imshow( self, image, title=None, rect=None, **kwargs ):
+        window = self.current_axes()
         if title is not None:
-            ax.set_title( title )
-        if rect is not None:
-            origin, w, h = rect
-            rect = patches.Rectangle( origin, w, h, linewidth=1, edgecolor='r', facecolor="none" )
-            ax.add_patch( rect )
-        image = ( image * 255 ).int()
-        ax.imshow( image, **kwargs )
-        ax.figure.canvas.draw_idle()
-        if not dontshow:
-            self.fig.show()
+            window.add_title( title )
+        window.add_image( image, **kwargs )
+        window.show()
         return True
 
     def show_graph( self, ax=None, aspect="auto" ):

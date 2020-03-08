@@ -123,7 +123,7 @@ class ShellBase( object ):
         
         val, id = y_data.topk( 5, dim=0, largest=True, sorted=True )
 
-        ax = self.fig.current_axes()
+        ax = self.fig.current_axes().ax
         ax.set_title( title )
         ax.bar( index, y_data, align="center", width=1 )
         for i, v in zip( id, val ):
