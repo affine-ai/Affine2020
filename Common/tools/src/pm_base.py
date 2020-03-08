@@ -83,9 +83,11 @@ class ShellBase( object ):
             return default
 
     def in_place_eval( self, args ):
+        locals = self.cur_frame.f_locals
+        globals = self.cur_frame.f_globals
         try:
             code = compile( args, "<string>", "eval" )
-            out = eval( code )
+            out = eval( code, globals, locals )
         except:
             self.error( sys.exc_info()[ 0 ] )
             return None
@@ -129,7 +131,7 @@ class ShellBase( object ):
         ax.grid()
         self.fig.show_graph( ax )
 
-    def show_weights_as_grid( self, weight, title=None, fnum=None, zoom=None ):
+    def show_weights_as_grid( self, weight, title=None, cursor=None, zoom=None ):
         if not isinstance( weight, torch.Tensor ):
             return False
         nf, nc, h, w = weight.size()
@@ -142,12 +144,12 @@ class ShellBase( object ):
             weight = torch.cat( ( weight, torch.ones( ( npad, nc, h, w ) ) ), dim=0 ) #pylint: disable=no-member
         
         grid = torchvision.utils.make_grid( weight, nrow=s, padding=1 )
-        if fnum is not None and not zoom:
-            x, y = ( h + 1 ) * ( fnum % s ), ( w + 1 ) * ( fnum // s )
+        if cursor is not None and not zoom:
+            x, y = ( h + 1 ) * ( cursor % s ), ( w + 1 ) * ( cursor // s )
             rect = ( ( x, y ), w + 2, h + 2 )
             self.fig.imshow( grid, title=title, rect=rect )
-        elif fnum is not None and zoom:
-            self.fig.imshow( weight[ fnum ] )
+        elif cursor is not None and zoom:
+            self.fig.imshow( weight[ cursor ] )
         else:
             self.fig.imshow( grid, title=title )
 

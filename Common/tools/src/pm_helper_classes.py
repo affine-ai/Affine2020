@@ -122,7 +122,7 @@ class GraphWindow( object ):
             ax.add_patch( rect )
         image = ( image * 255 ).int()
         ax.imshow( image, **kwargs )
-        ax.figure.canvas.draw()
+        ax.figure.canvas.draw_idle()
         if not dontshow:
             self.fig.show()
         return True

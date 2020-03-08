@@ -80,9 +80,9 @@ def main_worker( gpu, args, config, hyper ):
         optimizer.load_state_dict( checkpoint[ "optimizer" ] )
         amp.load_state_dict( checkpoint[ "amp" ] )
         start_epoch = checkpoint[ "epoch" ]
-        print( "Resuming from epoch {}, {}".format( start_epoch + 1, config.checkpoint_file ) )
         del checkpoint
     start_epoch = args.start_epoch - 1 if "start_epoch_overr" in args.__dict__ else start_epoch
+
 
     if args.evaluate:
         train_or_eval( False, gpu, val_loader, model, criterion, None, args, hyper, 0 )
@@ -98,7 +98,7 @@ def main_worker( gpu, args, config, hyper ):
         
         train_or_eval( True, gpu, train_loader, model, criterion, optimizer, args, hyper, epoch )
 
-        if args.prof is None and ( not distributed or gpu == 0 ):
+        if not args.prof and ( not distributed or gpu == 0 ):
             acc1 = train_or_eval( False, gpu, val_loader, model, criterion, None, args, hyper, 0 )
 
             is_best = acc1 > best_acc1
@@ -174,7 +174,7 @@ def train_or_eval( train, gpu, loader, model, criterion, optimizer, args, hyper,
             if publish_stats:
                 progress.display( i )
 
-            if  train and publish_stats:
+            if train and publish_stats:
                 args.writer.add_scalar( "Loss/{}".format( phase ), loss.item(), niter )
                 args.writer.add_scalar( "Accuracy/{}".format( phase ), acc1, niter )
                 args.writer.add_scalar( "Loss/Accuracy", acc1, lr * 10000 )

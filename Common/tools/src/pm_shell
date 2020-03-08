@@ -10,12 +10,13 @@ from functools import reduce
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torchvision
 from torchvision import transforms, datasets
 from torchvision.models import *
 from PIL import Image
-from pm_helper_classes import * 
+from pm_base import ShellBase
+from pm_helper_classes import Dataset
+
 
 model = None
 image = None
@@ -23,25 +24,15 @@ image = None
 class Config( object ):
     pass 
 
-class Shell( cmd.Cmd ):
+class Shell( ShellBase, cmd.Cmd ):
     def __init__( self, config ):
         super().__init__()
         self.config = config
-        self.dataset = None
-        self.image_size = 224
         self.rc_lines = []
-        self.device = "cpu"
-        self.models = {}
-        self.cur_model = None
-        self.data_post_process_fn = None
-        self.compare = None
-        self.verbose_help = True
-        self.quiet = False
-        self.stack = []
+        self.dataset = None
         #self.use_rawinput = False
         self.cur_frame = sys._getframe().f_back
-        self.fig = GraphWindow()
-        
+
         try:
             with open( ".pmdebugrc" ) as rc_file:
                 self.rc_lines.extend( rc_file )
@@ -144,7 +135,7 @@ class Shell( cmd.Cmd ):
         """Exits the shell
         """
         self.message( "Exiting shell" )
-        plt.close()
+        self.close()
         raise SystemExit
 
 
@@ -301,63 +292,54 @@ class Shell( cmd.Cmd ):
 
 
     @supports_compare
-    def do_show_first_layer_weights( self, args, fnum=None, zoom=False ):
+    def do_show_first_layer_weights( self, args ):
+        """Display the weight vectors in a layer as a grid:
+        Usage: show first layer weights [ model name/tensor ]
+        
+        If no arguments are given, it displays the first Conv layer weights in the default model
+        set in the context
+        If an optional model name if provided, it displays the first layer weight for that
+        model
+        Optionally, a weight tensor can be given as an argument.
+        """
         if not args and not self.cur_model:
             self.error( "No default model is set. Please set a model in context first." )
             return
         
         title = "Tensor {}".format( args )
-        weight = None
+        _weight = None
         if args and args not in self.models:
-            weight = self.in_place_eval( args )
-            if weight is None or not isinstance( weight, torch.Tensor ):
+            _weight = self.in_place_eval( args )
+            if _weight is None or not isinstance( _weight, torch.Tensor ):
                 self.error( "Can not display \"{}\". Not a model in context, or a tensor.".format( args ) )
                 return
 
-            if weight.dim() is not 4 and weight.size[ 1 ] not in ( 3, 1 ):
+            if _weight.dim() is not 4 and _weight.size[ 1 ] not in ( 3, 1 ):
                 self.error( "Tensor \"{}\" is incorrect shape for display".format( args ) )
                 return
 
-        if weight is None: 
+        if _weight is None: 
             model_info = self.models[ args ] if args else self.cur_model
             title = "{} first layer weights".format( model_info.name )
-            _, conv = model_info.find_instance( type=nn.Conv2d )
+            _, conv = model_info.find_first_instance( type=nn.Conv2d )
             if not conv:
                 self.error( "No Conv2d layer found" )
                 return
-            weight = conv.weight.detach()
+            _weight = conv.weight.detach()
         
-        nf, nc, h, w = weight.size()
-        # if the number of filters is not a perfect square, we pad 
-        # the tensor so that we can display it in a square grid
-        s = int( np.floor( np.sqrt( nf ) ) )
-        if pow( s, 2 ) < nf:
-            s += 1
-            npad = pow( s, 2, nf )
-            weight = torch.cat( ( weight, torch.ones( ( npad, nc, h, w ) ) ), dim=0 ) #pylint: disable=no-member
-        
-        grid = torchvision.utils.make_grid( weight, nrow=s, padding=1 )
-        if fnum is not None and not zoom:
-            x, y = ( h + 1 ) * ( fnum % s ), ( w + 1 ) * ( fnum // s )
-            rect = ( ( x, y ), w + 2, h + 2 )
-            self.fig.imshow( grid, title=title, rect=rect )
-        elif fnum is not None and zoom:
-            self.fig.imshow( weight[ fnum ] )
-        else:
-            self.fig.imshow( grid, title=title )
+        self.show_weights_as_grid( _weight, title )
 
     do_show_flw = do_show_first_layer_weights
 
 
-    def do_visual_weights( self, args ):
+    def do_visual_inspect( self, args ):
         def _render( fnum ):
-            self.do_show_first_layer_weights( "", fnum=fnum, zoom=False )
-            self.do_show_activations( "", fnum=fnum )
+            self.show_weights_as_grid( _weights, cursor=fnum )
+            self.fig.imshow( _data[ fnum ] )
 
         def _keypress( event ):
             nonlocal row
             nonlocal col
-            #print( event.key, row, col )
             if event.key == "left":
                 col = col - 1 if col > 0 else col
             elif event.key == "right":
@@ -368,6 +350,7 @@ class Shell( cmd.Cmd ):
                 row = row + 1 if row < 7 else row
             elif event.key == 'q' or event.key == 'Q':
                 self.fig.stop_event_loop()
+                return
             fnum = row * 8 + col
             _render( fnum )
         
@@ -375,7 +358,19 @@ class Shell( cmd.Cmd ):
             self.error( "No current model set in context" )
             return
 
-        self.cur_model.set_first_layer()
+        image = self.load_from_global( "image" )
+        if image is None:
+            self.error( "Please load an input image first" )
+            return
+
+        if not args or args == "first":
+            self.cur_model.set_first_layer()
+
+        self.cur_model.cur_layer.register_forward_hook()
+        _ = self.cur_model.model( image )
+        _data = self.cur_model.cur_layer.data().squeeze( 0 )
+        _weights = self.cur_model.cur_layer.layer.weight
+
         fnum = 0
         row = col = 0
         self.fig.set_mode( "dual" )        
@@ -389,7 +384,7 @@ class Shell( cmd.Cmd ):
 
 
     @supports_compare
-    def do_show_activations( self, args, fnum=None ):
+    def do_show_activations( self, args ):
         model_info, layer_info = self.get_info_from_context( args )
 
         if model_info is None:
@@ -408,15 +403,8 @@ class Shell( cmd.Cmd ):
         out = net( image )
         self.message( "{} out: {}".format( model_info.name, out.argmax() ) )
 
-        filter_str = "" if fnum is None else ", filter {}".format( fnum )
-        title = "{}{} activations".format( model_info.name, layer_info.id ) + filter_str
-
-        # If a filter number (fnum) is provided, we draw the activations for only that filter
-        # Otherwise we plot the activations of all the filters in the layer as a bargraph
-        if fnum is None:
-            self.display_bargraph( layer_info.data(), title, reduce_fn=self.data_post_process_fn )
-        else:
-            self.fig.imshow( layer_info.data().squeeze( 0 )[ fnum ] )
+        title = "{}{} activations".format( model_info.name, layer_info.id )
+        self.display_bargraph( layer_info.data(), title, reduce_fn=self.data_post_process_fn )
 
     do_show_act = do_show_activations
 
@@ -475,7 +463,7 @@ class Shell( cmd.Cmd ):
         msg = "{} guess: {}".format( model_info.name, idx )
         self.message( msg )
         self.fig.imshow( img, title=msg, dontshow=True )
-        self.fig.imshow( cam, persist=True, cmap=cm.jet, norm=colors.Normalize(), alpha=0.5 ) #pylint: disable=no-member
+        self.fig.imshow( cam, persist=True, cmap="jet", alpha=0.5 )
 
     do_show_heat = do_show_heatmap
 
@@ -537,42 +525,6 @@ class Shell( cmd.Cmd ):
         else:
             title = "{} gradients".format( layer_info.id )
             self.display_bargraph( data, title, reduce_fn=self.data_post_process_fn )
-
-
-    def do_set_context( self, args ):
-        model_name = args if args else "model"
-        model = self.load_from_global( model_name )
-        if model is None:
-            self.error( "Could not find a model by name \"{}\"".format( model_name ) )
-            return
-
-        if not isinstance( model, nn.Module ):
-            self.error( "{} is not a valid model" )
-            return
-
-        # If model is already in context, we only need to switch the pointer
-        # Otherwise we need to set up the model in the context first
-        if model_name in self.models:
-            self.cur_model = self.models[ model_name ]
-        else:
-            self.cur_model = ModelMeta( model, model_name )
-            self.models[ model_name ] = self.cur_model
-        self.message( "Context now is \"{}\"".format( model_name ) )
-        self.fig.set_window_title( model_name )
-    
-    do_set_ctx = do_set_context
-
-
-    def do_resync( self, args ):
-        if not args:
-            self.error( "Please provide a model name" )
-            return
-
-        if args not in self.models:
-            self.error( "Model \"{}\" not in context".format( args ) )
-            return
-
-        self.resync_model( args )
 
 
     def do_set_post_process( self, args ):
@@ -671,13 +623,41 @@ class Shell( cmd.Cmd ):
             self.error( "Invalid comand option \"{}\"".format( args[ 0 ] ) )
 
 
+    def do_set_context( self, args ):
+        model_name = args if args else "model"
+        model = self.load_from_global( model_name )
+        if model is None:
+            self.error( "Could not find a model by name \"{}\"".format( model_name ) )
+            return
+
+        if not isinstance( model, nn.Module ):
+            self.error( "{} is not a valid model" )
+            return
+
+        self.set_model( model_name, model )
+
+        self.message( "Context now is \"{}\"".format( model_name ) )
+        self.fig.set_window_title( model_name )
+    
+    do_set_ctx = do_set_context
+
+
+    def do_resync( self, args ):
+        if not args:
+            self.error( "Please provide a model name" )
+            return
+
+        if args not in self.models:
+            self.error( "Model \"{}\" not in context".format( args ) )
+            return
+
+        self.resync_model( args )
+
+
     def do_set_class( self, args ):
         if self.dataset is None:
             self.error( "No dataset is configured" )
-        if args:
-            idx = int( args )
-        else:
-            idx = 0
+        idx = int( args ) if args else 0
         if not self.dataset.set_class( idx ):
             self.error( "Could not set class to {}".format( args ) )
 
@@ -704,121 +684,10 @@ class Shell( cmd.Cmd ):
         else:
             self.error( "Could not change suffix" )
         
-    ###########################
-    # Utility functions go here
-    ###########################
-    def resync_model( self, name ):
-        set_as_cur_model = False
-
-        cur_model_in_context = self.models[ name ]
-
-        if self.cur_model is cur_model_in_context:
-            self.cur_model = None
-            set_as_cur_model = True
-
-        del self.models[ name ]
-        
-        new_model = self.load_from_global( name )
-        if new_model is not None and isinstance( new_model, nn.Module ):
-            new_model_info = ModelMeta( new_model, name )
-            self.models[ name ] = new_model_info
-            if set_as_cur_model:
-                self.cur_model = new_model_info
-
-
-    def load_from_global( self, arg, default=None ):
-        """This method first processes arg:
-            1. If arg is in the global context, return it's value
-            2. If arg is not in the global context:
-                1. And no default is provided, return None
-                2. And a default is provided, process default
-        Process default:
-            1. Check if default is a string:
-                1. If it is, look for it in global context and return it's value
-                2. If not in global context, return None
-            2. If default is not a string, return default as it is
-        """
-        if not arg and not default:
-            return None
-
-        if arg in self.cur_frame.f_globals:
-            return self.cur_frame.f_globals[ arg ]
-        elif default is None:
-            return None
-        elif isinstance( default, str ):
-            if default in self.cur_frame.f_globals:
-                return self.cur_frame.f_globals[ default ]
-            else:
-                return None
-        else:
-            # We are here if args not in context and a non-string default is provided
-            return default
-
-
-    def in_place_eval( self, args ):
-        try:
-            code = compile( args, "<string>", "eval" )
-            out = eval( code )
-        except:
-            self.error( sys.exc_info()[ 0 ] )
-            return None
-        else:
-            return out
-
-
-    def get_info_from_context( self, args ):
-        if args and args not in self.models:
-            self.error( "Could not find model {}".format( args ) )
-            return None, None
-        
-        if not args and not self.cur_model:
-            self.error( "No default model is set. Please set a model first" )
-            return None, None
-
-        model_info = self.models[ args ] if args else self.cur_model
-        layer_info = model_info.cur_layer
-
-        return model_info, layer_info
-
-
-    def display_bargraph( self, data, title, reduce_fn=None ):
-        if data.size( 0 ) != 1:
-            self.error( "Unsupported data dimensions" )
-            return
-
-        reduce_fn = torch.mean if reduce_fn is None else reduce_fn        
-        data = data.squeeze( 0 )
-        index = np.arange( data.size( 0 ) )
-        # The following statement is invariant to data of dimension ( 1 ).
-        # such as a list of tensors. Along the first dimension, replace 
-        # the elements with any remaining dimensions with their mean.
-        y_data = torch.tensor( list( map( lambda x: reduce_fn( x ).float().item(), data[ : ] ) ) )
-        
-        val, id = y_data.topk( 5, dim=0, largest=True, sorted=True )
-
-        ax = self.fig.current_axes()
-        ax.set_title( title )
-        ax.bar( index, y_data, align="center", width=1 )
-        for i, v in zip( id, val ):
-            ax.text( i, v, "{}".format( i ) )
-        ax.grid()
-        self.fig.show_graph( ax )
-
 
     ####################################################
     # Helper functions to debugger functionality go here
     ####################################################
-    def error( self, err_msg ):
-        self.stdout.write( "*** {}\n".format( err_msg ) )
-
-    def message( self, msg="", end="\n" ):
-        if not self.quiet:
-            self.stdout.write( msg + end )
-
-    def help( self, msg="", end="\n" ):
-        if self.verbose_help:
-            self.stdout.write( "Info: " + msg + end )
-
     def exec_rc( self ):
         if not self.rc_lines:
             return
@@ -870,6 +739,7 @@ class Shell( cmd.Cmd ):
             except RuntimeError as e:
                 self.error( "----------Error----------" )
                 self.error( e )
+                traceback.print_exc()
 
 
 if __name__ == "__main__":
