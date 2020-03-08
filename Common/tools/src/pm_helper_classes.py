@@ -21,7 +21,6 @@ from PIL import Image
 # Disable the top menubar on plots
 matplotlib.rcParams[ "toolbar" ] = "None"
 
-
 class GraphWindow( object ):
     def __init__( self ):
         self.fig = plt.figure()
@@ -32,7 +31,7 @@ class GraphWindow( object ):
         self.mode = None
         self.set_window_title()
         self.set_mode( "single" )
-        self.fig.canvas.mpl_connect( "close_event", self.handle_window_close )
+        self.fig.canvas.mpl_connect( "close_event", self.on_window_close )
 
     def set_window_title( self, title=None ):
         if title is None:
@@ -83,7 +82,7 @@ class GraphWindow( object ):
             return False
         return self.fig.axes[ num ]
 
-    def handle_window_close( self, event ):
+    def on_window_close( self, event ):
         self.fig.canvas.stop_event_loop()
 
     def on_event( self, type, func ):
@@ -238,7 +237,7 @@ class ModelMeta( object ):
 
     def traverse_updown( self, dir ):
         id = self.cur_layer.id
-        new_id, new_layer = self.find_instance( key=id, dir=dir )
+        new_id, new_layer = self.find_first_instance( key=id, dir=dir )
         
         if not new_id:
             return False
@@ -249,13 +248,13 @@ class ModelMeta( object ):
         return True
 
     def set_first_layer( self ):
-        id, layer = self.find_instance( type=nn.Conv2d )
+        id, layer = self.find_first_instance( type=nn.Conv2d )
         if not id:
             return False
         self.cur_layer = self.get_layer_info( id, layer )
         return True
 
-    def find_instance( self, key=None, dir=0, type=None, net=None ):
+    def find_first_instance( self, key=None, dir=0, type=None, net=None ):
         """This function implements a depth first search that terminates 
         as soon as a sufficient condition is met
         """
