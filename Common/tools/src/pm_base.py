@@ -69,13 +69,14 @@ class ShellBase( object ):
         if not arg and not default:
             return None
 
-        if arg in self.cur_frame.f_globals:
-            return self.cur_frame.f_globals[ arg ]
+        cur_frame = sys._getframe().f_back
+        if arg in cur_frame.f_globals:
+            return cur_frame.f_globals[ arg ]
         elif default is None:
             return None
         elif isinstance( default, str ):
-            if default in self.cur_frame.f_globals:
-                return self.cur_frame.f_globals[ default ]
+            if default in cur_frame.f_globals:
+                return cur_frame.f_globals[ default ]
             else:
                 return None
         else:

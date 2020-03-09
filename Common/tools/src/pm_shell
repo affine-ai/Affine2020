@@ -17,7 +17,7 @@ from torch.nn.functional import softmax
 from PIL import Image
 from pm_base import ShellBase
 from pm_helper_classes import Dataset
-
+from layer_visualizer import LayerVisualizer
 
 model = None
 image = None
@@ -333,90 +333,18 @@ class Shell( ShellBase, cmd.Cmd ):
     do_show_flw = do_show_first_layer_weights
 
 
-    def do_visual_inspect( self, args ):
-        fnum = 0
-        row = col = 0
-        grid_size = 0
-        _weights = None
-        _data = None
-
-        def _render( fnum ):
-            self.show_weights_as_grid( _weights, cursor=fnum )
-            self.fig.imshow( _data[ fnum ] )
-
-        def _evaluate():
-            nonlocal fnum
-            nonlocal row
-            nonlocal col
-            nonlocal grid_size
-            nonlocal _weights
-            nonlocal _data
-
-            fnum = 0
-            row = col = 0
-            self.cur_model.cur_layer.register_forward_hook()
-            _ = self.cur_model.model( image )
-            _data = self.cur_model.cur_layer.data().squeeze( 0 )
-            _weights = self.cur_model.cur_layer.layer.weight.detach().clone()
-
-            # If the layer has more than 3 output filters, reduce them so they
-            # can be displayed
-            if _weights.size( 1 ) > 3:
-                _weights = torch.mean( _weights, dim=1, keepdim=True )
-
-            grid_size = self.compute_grid_size( _weights.size( 0 ) )
-            print( self.cur_model.cur_layer.id, self.cur_model.cur_layer.layer )
-
-
-        def _keypress( event ):
-            nonlocal row
-            nonlocal col
-            _row = row
-            _col = col
-            if event.key == "left":
-                _col = col - 1 if col > 0 else col
-            elif event.key == "right":
-                _col = col + 1 if col < grid_size - 1 else col
-            elif event.key == "up":
-                _row = row - 1 if row > 0 else row
-            elif event.key == "down":
-                _row = row + 1 if row < grid_size - 1 else row
-            elif event.key == "pageup":
-                self.cur_model.traverse_updown( dir=-1, type=nn.Conv2d )
-                _evaluate()
-            elif event.key == "pagedown":
-                self.cur_model.traverse_updown( dir=1, type=nn.Conv2d )
-                _evaluate()
-            elif event.key == 'q' or event.key == 'Q':
-                self.fig.stop_event_loop()
-                return
-            fnum = _row * grid_size + _col
-            if fnum < _weights.size( 0 ):
-                row, col = _row, _col
-                _render( fnum )
-        
+    def do_visualizer( self, args ):
         if self.cur_model is None:
             self.error( "No current model set in context" )
             return
-
         image = self.load_from_global( "image" )
         if image is None:
             self.error( "Please load an input image first" )
             return
 
-        if not args or args == "first":
-            self.cur_model.set_first_layer()
-
-        _evaluate()
-
-        self.fig.set_mode( "dual" )        
-        try:
-            _render( fnum )
-            self.fig.on_event( "key_press_event", _keypress )
-        except:
-            raise
-        finally:
-            self.fig.set_mode( "single" )        
+        visual = LayerVisualizer( self.cur_model )
+        visual.set_image( image )
+        visual.start()
 
 
     @supports_compare
