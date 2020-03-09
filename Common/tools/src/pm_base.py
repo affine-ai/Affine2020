@@ -123,7 +123,7 @@ class ShellBase( object ):
         
         val, id = y_data.topk( 5, dim=0, largest=True, sorted=True )
 
-        ax = self.fig.current_axes().ax
+        ax = self.fig.get_or_create_window().ax
         ax.set_title( title )
         ax.bar( index, y_data, align="center", width=1 )
         for i, v in zip( id, val ):
@@ -131,27 +131,37 @@ class ShellBase( object ):
         ax.grid()
         self.fig.show_graph( ax )
 
+    def compute_grid_size( self, nf ):
+        s = int( np.floor( np.sqrt( nf ) ) )
+        if pow( s, 2 ) < nf:
+            s += 1
+        return s
+
     def show_weights_as_grid( self, weight, title=None, cursor=None, zoom=None ):
         if not isinstance( weight, torch.Tensor ):
             return False
         nf, nc, h, w = weight.size()
         # if the number of filters is not a perfect square, we pad 
         # the tensor so that we can display it in a square grid
-        s = int( np.floor( np.sqrt( nf ) ) )
-        if pow( s, 2 ) < nf:
-            s += 1
-            npad = pow( s, 2, nf )
+        s = self.compute_grid_size( nf )
+        npad = pow( s, 2, nf )
+        if npad:
             weight = torch.cat( ( weight, torch.ones( ( npad, nc, h, w ) ) ), dim=0 ) #pylint: disable=no-member
         
-        grid = torchvision.utils.make_grid( weight, nrow=s, padding=1 )
-        if cursor is not None and not zoom:
-            x, y = ( h + 1 ) * ( cursor % s ), ( w + 1 ) * ( cursor // s )
-            rect = ( ( x, y ), w + 2, h + 2 )
-            self.fig.imshow( grid, title=title, rect=rect )
-        elif cursor is not None and zoom:
-            self.fig.imshow( weight[ cursor ] )
+        if zoom is None:
+            grid = torchvision.utils.make_grid( weight, nrow=s, padding=1 )
         else:
-            self.fig.imshow( grid, title=title )
+            grid = weight[ cursor ]
+
+        window = self.fig.get_or_create_window()
+        if cursor is not None:
+            x, y = ( h + 1 ) * ( cursor % s ), ( w + 1 ) * ( cursor // s )
+            rect = ( ( x, y ), w + 1, h + 1 )
+            window.set_cursor( rect )
+        window.add_title( title )
+        window.add_image( grid )
+        window.show()
+
 
     def error( self, err_msg ):
         self.stdout.write( "*** {}\n".format( err_msg ) )

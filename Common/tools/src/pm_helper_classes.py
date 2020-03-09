@@ -36,8 +36,7 @@ class Window( object ):
             cursor = patches.Rectangle( origin, w, h, linewidth=1, edgecolor='r', facecolor="none" )
             if self.cursor is not None:
                 self.cursor.remove()
-            self.cursor = cursor
-            self.ax.add_patch( self.cursor )
+            self.cursor = self.ax.add_patch( cursor )
 
     def add_title( self, t ):
         self.ax.set_title( t )
@@ -63,14 +62,15 @@ class Window( object ):
 
     def show( self ):
         for a in self.artists:
-            print( a )
             self.ax.draw_artist( a )
         if self.cursor:
             self.ax.draw_artist( self.cursor )
         self.ax.figure.canvas.blit( self.ax.bbox )
+        self.artists = []
 
     def clear( self ):
         self.ax.clear()
+        self.artists = []
 
 class GraphWindow( object ):
     def __init__( self ):
@@ -115,7 +115,7 @@ class GraphWindow( object ):
             self.windows.append( window )
         self.cur_window = 0
 
-    def current_axes( self, persist=False ):
+    def get_or_create_window( self, persist=False ):
         """Return the current axis to draw on.
         If persist flag is set, always return the current axis.
         If persist flag is not set:
@@ -148,7 +148,7 @@ class GraphWindow( object ):
         self.fig.canvas.stop_event_loop()
 
     def imshow( self, image, title=None, rect=None, **kwargs ):
-        window = self.current_axes()
+        window = self.get_or_create_window()
         if title is not None:
             window.add_title( title )
         window.add_image( image, **kwargs )
@@ -263,15 +263,14 @@ class ModelMeta( object ):
     def down( self ):
         return self.traverse_updown( dir=1 )
 
-    def traverse_updown( self, dir ):
+    def traverse_updown( self, dir, type=None ):
         id = self.cur_layer.id
-        new_id, new_layer = self.find_first_instance( key=id, dir=dir )
+        new_id, new_layer = self.find_first_instance( key=id, dir=dir, type=type )
         
         if not new_id:
             return False
 
         id, layer = new_id, new_layer
-
         self.cur_layer = self.get_layer_info( id, layer )
         return True
 
@@ -284,7 +283,7 @@ class ModelMeta( object ):
 
     def find_first_instance( self, key=None, dir=0, type=None, net=None ):
         """This function implements a depth first search that terminates 
-        as soon as a sufficient condition is met
+        as soon as a sufficient condition is met.
         """
         net = self.model if net is None else net
 
@@ -311,23 +310,27 @@ class ModelMeta( object ):
                 if cur_frame == key:
                     if dir == -1:
                         terminate = True
-                    elif dir == 1:
+                    elif dir == 1 and type is None:
                         terminate_next = True
                         frame = []
+                    elif dir == 1 and type is not None:
+                            key = None
                     elif dir == 0:
                         terminate = True
                         frame, leaf = cur_frame.copy(), m
                 elif type is not None and isinstance( m, type ):
-                    terminate = True
+                    if key is None:
+                        terminate = True
                     frame, leaf = cur_frame.copy(), m
-                else:
+                elif not list( m.children() ):
                     # We don't have a key match, treat it like a normal iteration
-                    # If this is a leaf node, save it's location else recurse further
-                    if not list( m.children() ):
+                    # If this is a leaf node, save it's location
+                    if type is None or isinstance( m, type ):
                         frame, leaf = cur_frame.copy(), m
-                        terminate = terminate_next
-                    else:
-                        _recurse_layer( m )
+                    terminate = terminate_next
+                else:
+                    # If this is not a leaf node, recurse into it
+                    _recurse_layer( m )
 
                 cur_frame.pop()       
             return
