@@ -1,5 +1,6 @@
 
 from pm_base import ShellBase
+import torch
 import torch.nn as nn
 
 class LayerVisualizer( ShellBase ):
@@ -13,7 +14,7 @@ class LayerVisualizer( ShellBase ):
         self._weights = None
         self._data = None
         self.model_info.set_first_layer()
-
+        
     def set_image( self, image ):
         self.image = image
 
@@ -66,10 +67,10 @@ class LayerVisualizer( ShellBase ):
         elif event.key == "down":
             _row = row + 1 if row < self.grid_size - 1 else row
         elif event.key == "pageup":
-            self.cur_model.traverse_updown( dir=-1, type=nn.Conv2d )
+            self.model_info.traverse_updown( dir=-1, type=nn.Conv2d )
             self.evaluate()
         elif event.key == "pagedown":
-            self.cur_model.traverse_updown( dir=1, type=nn.Conv2d )
+            self.model_info.traverse_updown( dir=1, type=nn.Conv2d )
             self.evaluate()
         elif event.key == 'q' or event.key == 'Q':
             self.fig.stop_event_loop()

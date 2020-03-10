@@ -31,6 +31,8 @@ class Shell( ShellBase, cmd.Cmd ):
         self.config = config
         self.rc_lines = []
         self.dataset = None
+        self.compare = None
+        self.data_post_process_fn = None
         #self.use_rawinput = False
         self.cur_frame = sys._getframe().f_back
 

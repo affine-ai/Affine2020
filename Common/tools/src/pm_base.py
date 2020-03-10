@@ -19,14 +19,12 @@ class ShellBase( object ):
         self.device = "cpu"
         self.models = {}
         self.cur_model = None
-        self.data_post_process_fn = None
-        self.compare = None
         self.verbose_help = True
         self.quiet = False
         self.stack = []
         self.cur_frame = sys._getframe().f_back
         self.fig = GraphWindow()
-
+        print( "Init base")
     def set_model( self, name, model ):
         # If model is already in context, we only need to switch the pointer
         # Otherwise we need to set up the model in the context first

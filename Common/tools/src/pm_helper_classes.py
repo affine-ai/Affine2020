@@ -66,6 +66,7 @@ class Window( object ):
         if self.cursor:
             self.ax.draw_artist( self.cursor )
         self.ax.figure.canvas.blit( self.ax.bbox )
+        self.ax.figure.show()
         self.artists = []
 
     def clear( self ):
