@@ -42,16 +42,16 @@ class data_prefetcher( object ):
 ###################################
 #  ImageNet
 ###################################
-normalize = transforms.Normalize( [ 0.45, 0.45, 0.45 ],
-                                    [ 0.225, 0.225, 0.225 ] )
-#normalize = transforms.Normalize( [ 0.485, 0.456, 0.406 ],
-#                                 [ 0.229, 0.224, 0.225 ] )
+#normalize = transforms.Normalize( [ 0.45, 0.45, 0.45 ],
+#                                    [ 0.225, 0.225, 0.225 ] )
+normalize = transforms.Normalize( [ 0.485, 0.456, 0.406 ],
+                                 [ 0.229, 0.224, 0.225 ] )
 def load_imagenet_data( path, args, hyper, distributed ):
     """Training set preprocessing and loader
     """
-    transform = transforms.Compose( [ transforms.RandomResizedCrop( 224, scale=( 0.08, 1.0 ) ),
+    transform = transforms.Compose( [ transforms.RandomResizedCrop( 224 ),
                                       transforms.RandomHorizontalFlip(),
-                                      transforms.Grayscale( num_output_channels=3 ),
+                                      #transforms.Grayscale( num_output_channels=3 ),
                                       transforms.ToTensor(),
                                       normalize 
                                     ] )

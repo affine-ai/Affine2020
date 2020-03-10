@@ -16,6 +16,7 @@ from torch.multiprocessing import Process
 import torch.distributed as dist
 from torchvision import transforms, datasets
 from torch.utils.tensorboard import SummaryWriter
+from torchvision.models import resnet18
 
 try:
     import apex
@@ -36,9 +37,6 @@ def main_worker( gpu, args, config, hyper ):
     start_epoch = 0
     distributed = args.gpu is None
 
-    if hyper.lr_policy not in ( "triangle", "triangle2" ):
-        print( "Unsupported learning rate policy." )
-        raise SystemExit
 
     if distributed:
         dist.init_process_group( backend=args.dist_backend, 
@@ -53,7 +51,7 @@ def main_worker( gpu, args, config, hyper ):
     val_loader = load_val( config.val_path, args, hyper, distributed )
     assert train_loader.dataset.classes == val_loader.dataset.classes
 
-    model = darknet()
+    model = resnet18()
     model.cuda( gpu )
 
     criterion = nn.CrossEntropyLoss().cuda( gpu )
@@ -82,7 +80,6 @@ def main_worker( gpu, args, config, hyper ):
         start_epoch = checkpoint[ "epoch" ]
         del checkpoint
     start_epoch = args.start_epoch - 1 if "start_epoch_overr" in args.__dict__ else start_epoch
-
 
     if args.evaluate:
         train_or_eval( False, gpu, val_loader, model, criterion, None, args, hyper, 0 )
@@ -150,7 +147,7 @@ def train_or_eval( train, gpu, loader, model, criterion, optimizer, args, hyper,
             loss = criterion( output, target )
             
             if train:
-                lr = adjust_learning_rate( optimizer, niter, hyper )
+                lr = adjust_learning_rate( optimizer, niter, hyper, len( loader ) )
 
                 optimizer.zero_grad()
                 

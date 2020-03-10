@@ -37,14 +37,16 @@ def parse_args():
     # optimizer parameters
     parser.add_argument( "--momentum", default=0.9, type=float, action=UserHyperParam,
                          help="momentum")
-    parser.add_argument( "--weight-decay", default=1e-6, type=float, action=UserHyperParam,
+    parser.add_argument( "--weight-decay", default=1e-4, type=float, action=UserHyperParam,
                          help="weight decay" )
     parser.add_argument( "--base-lr", default=0.0001, type=float, action=UserHyperParam,
                          help="min learning rate" )
     parser.add_argument( "--max-lr", default=0.1, type=float, action=UserHyperParam,
                          help="max learning rate" )
-    parser.add_argument( "--stepsize", default=1000, type=int, action=UserHyperParam,
-                         help="half the number of iterations to cycle the learning rate" )
+    parser.add_argument( "--stepsize", default=1, type=float, action=UserHyperParam,
+                         help="half the number of epochs to cycle the learning rate" )
+    parser.add_argument( "--batch-size", default=128, type=int, action=UserHyperParam,
+                         help="batch size" )
     parser.add_argument( "--lr-policy", default="triangle", type=str, action=UserHyperParam, 
                                             choices=[ "triangle", "triangle2", "constant" ],
                          help="Select the learning rate adjustment policy" )    
@@ -54,8 +56,6 @@ def parse_args():
                          help="start epoch number if different from 0" )
     parser.add_argument( "--epochs", default=1, type=int,
                          help="total number of epochs to run" )
-    parser.add_argument( "--batch-size", default=128, type=int, action=UserHyperParam,
-                         help="batch size" )
     parser.add_argument( "--use-cpu", type=int, default=True,
                          help="set True to train on CPU")
     parser.add_argument( "--pretrained", dest="pretrained", action="store_true",
@@ -198,16 +198,20 @@ def load_checkpoint( model, checkpoint_path ):
             return True
     return False
 
-def adjust_learning_rate( optimizer, i, hyper ):
+def adjust_learning_rate( optimizer, i, hyper, num_batches ):
     """learning rate schedule
     """
-    cycle = math.floor( 1 + i / ( 2 * hyper.stepsize ) )
+    if hyper.lr_policy == "constant":
+        return hyper.base_lr
+        
+    stepsize = hyper.stepsize * num_batches
+    cycle = math.floor( 1 + i / ( 2 * stepsize ) )
     if hyper.lr_policy == "triangle2":
         range = ( hyper.max_lr - hyper.base_lr ) / pow( 2, int( cycle - 1 ) )
     else:
         range = ( hyper.max_lr - hyper.base_lr )
 
-    x = abs( i / hyper.stepsize - 2 * cycle + 1 )
+    x = abs( i / stepsize - 2 * cycle + 1 )
     lr = hyper.base_lr + range * max( 0.0, ( 1.0 - x ) )
 
     for param_group in optimizer.param_groups:
